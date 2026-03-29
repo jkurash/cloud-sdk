@@ -156,4 +156,155 @@ impl NetworkingService for AzureNetworkingService {
         let url = self.client.config().nsg_url(resource_group, name);
         self.client.delete(url, API_VERSION).await
     }
+
+    // ── Security Rules ────────────────────────────────────────────────
+
+    async fn create_or_update_security_rule(
+        &self,
+        resource_group: &str,
+        nsg_name: &str,
+        rule_name: &str,
+        params: CreateSecurityRuleParams,
+    ) -> Result<SecurityRule, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .security_rule_url(resource_group, nsg_name, rule_name);
+        let (rule, _) = self.client.put(url, API_VERSION, &params).await?;
+        Ok(rule)
+    }
+
+    async fn get_security_rule(
+        &self,
+        resource_group: &str,
+        nsg_name: &str,
+        rule_name: &str,
+    ) -> Result<SecurityRule, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .security_rule_url(resource_group, nsg_name, rule_name);
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn list_security_rules(
+        &self,
+        resource_group: &str,
+        nsg_name: &str,
+    ) -> Result<Page<SecurityRule>, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .security_rules_url(resource_group, nsg_name);
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn delete_security_rule(
+        &self,
+        resource_group: &str,
+        nsg_name: &str,
+        rule_name: &str,
+    ) -> Result<(), CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .security_rule_url(resource_group, nsg_name, rule_name);
+        self.client.delete(url, API_VERSION).await
+    }
+
+    // ── Network Interfaces ────────────────────────────────────────────
+
+    async fn create_network_interface(
+        &self,
+        resource_group: &str,
+        name: &str,
+        params: CreateNetworkInterfaceParams,
+    ) -> Result<NetworkInterface, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .network_interface_url(resource_group, name);
+        let (nic, _) = self.client.put(url, API_VERSION, &params).await?;
+        Ok(nic)
+    }
+
+    async fn get_network_interface(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<NetworkInterface, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .network_interface_url(resource_group, name);
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn list_network_interfaces(
+        &self,
+        resource_group: &str,
+    ) -> Result<Page<NetworkInterface>, CloudSdkError> {
+        let url = self.client.config().network_interfaces_url(resource_group);
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn delete_network_interface(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<(), CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .network_interface_url(resource_group, name);
+        self.client.delete(url, API_VERSION).await
+    }
+
+    // ── Public IP Addresses ───────────────────────────────────────────
+
+    async fn create_public_ip_address(
+        &self,
+        resource_group: &str,
+        name: &str,
+        params: CreatePublicIPAddressParams,
+    ) -> Result<PublicIPAddress, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .public_ip_address_url(resource_group, name);
+        let (ip, _) = self.client.put(url, API_VERSION, &params).await?;
+        Ok(ip)
+    }
+
+    async fn get_public_ip_address(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<PublicIPAddress, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .public_ip_address_url(resource_group, name);
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn list_public_ip_addresses(
+        &self,
+        resource_group: &str,
+    ) -> Result<Page<PublicIPAddress>, CloudSdkError> {
+        let url = self.client.config().public_ip_addresses_url(resource_group);
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn delete_public_ip_address(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<(), CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .public_ip_address_url(resource_group, name);
+        self.client.delete(url, API_VERSION).await
+    }
 }

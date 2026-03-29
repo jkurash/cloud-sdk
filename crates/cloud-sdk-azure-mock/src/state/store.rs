@@ -6,8 +6,9 @@ use cloud_sdk_core::models::resource::{
 use cloud_sdk_core::services::compute::{CreateVirtualMachineParams, PowerState, VirtualMachine};
 use cloud_sdk_core::services::identity::{Principal, PrincipalType, RoleAssignment};
 use cloud_sdk_core::services::networking::{
-    CreateNsgParams, CreateSubnetParams, CreateVirtualNetworkParams, NetworkSecurityGroup, Subnet,
-    SubnetProperties, VirtualNetwork,
+    CreateNetworkInterfaceParams, CreateNsgParams, CreatePublicIPAddressParams,
+    CreateSecurityRuleParams, CreateSubnetParams, CreateVirtualNetworkParams, NetworkInterface,
+    NetworkSecurityGroup, PublicIPAddress, SecurityRule, Subnet, SubnetProperties, VirtualNetwork,
 };
 use cloud_sdk_core::services::storage::{
     BlobContainer, BlobProperties, CreateStorageAccountParams, StorageAccount,
@@ -56,6 +57,8 @@ struct ResourceGroupState {
     virtual_machines: HashMap<String, VmState>,
     virtual_networks: HashMap<String, VnetState>,
     network_security_groups: HashMap<String, NetworkSecurityGroup>,
+    network_interfaces: HashMap<String, NetworkInterface>,
+    public_ip_addresses: HashMap<String, PublicIPAddress>,
 }
 
 struct VnetState {
@@ -121,6 +124,8 @@ impl MockState {
                         virtual_machines: HashMap::new(),
                         virtual_networks: HashMap::new(),
                         network_security_groups: HashMap::new(),
+                        network_interfaces: HashMap::new(),
+                        public_ip_addresses: HashMap::new(),
                     },
                 );
             }
@@ -230,6 +235,8 @@ state = "Enabled"
                 virtual_machines: HashMap::new(),
                 virtual_networks: HashMap::new(),
                 network_security_groups: HashMap::new(),
+                network_interfaces: HashMap::new(),
+                public_ip_addresses: HashMap::new(),
             },
         );
 
@@ -1286,6 +1293,315 @@ state = "Enabled"
         Ok(rg.network_security_groups.remove(name).is_some())
     }
 
+    // ── Security Rules (individual CRUD within NSGs) ──────────────────
+
+    pub async fn create_or_update_security_rule(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        nsg_name: &str,
+        rule_name: &str,
+        params: &CreateSecurityRuleParams,
+    ) -> Result<(SecurityRule, bool), String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        let nsg = rg
+            .network_security_groups
+            .get_mut(nsg_name)
+            .ok_or_else(|| format!("NSG '{nsg_name}' not found"))?;
+
+        let nsg_id = nsg.id.clone();
+        let mut props = params.properties.clone();
+        props.provisioning_state = Some("Succeeded".to_string());
+
+        let rule = SecurityRule {
+            id: Some(format!("{nsg_id}/securityRules/{rule_name}")),
+            name: rule_name.to_string(),
+            etag: Some("\"1\"".to_string()),
+            resource_type: Some(
+                "Microsoft.Network/networkSecurityGroups/securityRules".to_string(),
+            ),
+            properties: props,
+        };
+
+        // Check if existing rule with same name
+        let is_new = !nsg
+            .properties
+            .security_rules
+            .iter()
+            .any(|r| r.name == rule_name);
+
+        // Remove existing rule if present, then add
+        nsg.properties
+            .security_rules
+            .retain(|r| r.name != rule_name);
+        nsg.properties.security_rules.push(rule.clone());
+
+        Ok((rule, is_new))
+    }
+
+    pub async fn get_security_rule(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        nsg_name: &str,
+        rule_name: &str,
+    ) -> Option<SecurityRule> {
+        let state = self.inner.read().await;
+        let nsg = state
+            .subscriptions
+            .get(subscription_id)?
+            .resource_groups
+            .get(resource_group)?
+            .network_security_groups
+            .get(nsg_name)?;
+
+        nsg.properties
+            .security_rules
+            .iter()
+            .find(|r| r.name == rule_name)
+            .cloned()
+    }
+
+    pub async fn list_security_rules(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        nsg_name: &str,
+    ) -> Option<Page<SecurityRule>> {
+        let state = self.inner.read().await;
+        let nsg = state
+            .subscriptions
+            .get(subscription_id)?
+            .resource_groups
+            .get(resource_group)?
+            .network_security_groups
+            .get(nsg_name)?;
+
+        Some(Page::new(nsg.properties.security_rules.clone()))
+    }
+
+    pub async fn delete_security_rule(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        nsg_name: &str,
+        rule_name: &str,
+    ) -> Result<bool, String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        let nsg = rg
+            .network_security_groups
+            .get_mut(nsg_name)
+            .ok_or_else(|| format!("NSG '{nsg_name}' not found"))?;
+
+        let len_before = nsg.properties.security_rules.len();
+        nsg.properties
+            .security_rules
+            .retain(|r| r.name != rule_name);
+        Ok(nsg.properties.security_rules.len() < len_before)
+    }
+
+    // ── Network Interfaces ────────────────────────────────────────────
+
+    pub async fn create_network_interface(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+        params: &CreateNetworkInterfaceParams,
+    ) -> Result<(NetworkInterface, bool), String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+
+        let nic_id = format!(
+            "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Network/networkInterfaces/{name}"
+        );
+
+        let mut props = params.properties.clone();
+        props.provisioning_state = Some("Succeeded".to_string());
+        props.resource_guid = Some(uuid::Uuid::new_v4().to_string());
+
+        // Auto-generate MAC address
+        if props.mac_address.is_none() {
+            let mac = Self::generate_mock_mac();
+            props.mac_address = Some(mac);
+        }
+
+        // Set provisioningState on IP configurations
+        if let Some(ref mut ip_configs) = props.ip_configurations {
+            for (i, ip_config) in ip_configs.iter_mut().enumerate() {
+                if ip_config.id.is_none() {
+                    let config_name = ip_config.name.as_deref().unwrap_or("ipconfig");
+                    ip_config.id = Some(format!("{nic_id}/ipConfigurations/{config_name}"));
+                }
+                if let Some(ref mut config_props) = ip_config.properties {
+                    config_props.provisioning_state = Some("Succeeded".to_string());
+                    if i == 0 && config_props.primary.is_none() {
+                        config_props.primary = Some(true);
+                    }
+                }
+            }
+        }
+
+        let is_new = !rg.network_interfaces.contains_key(name);
+
+        let nic = NetworkInterface {
+            id: nic_id,
+            name: name.to_string(),
+            resource_type: "Microsoft.Network/networkInterfaces".to_string(),
+            location: params.location.clone(),
+            tags: params.tags.clone(),
+            etag: Some("\"1\"".to_string()),
+            properties: props,
+        };
+
+        rg.network_interfaces.insert(name.to_string(), nic.clone());
+        Ok((nic, is_new))
+    }
+
+    pub async fn get_network_interface(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+    ) -> Option<NetworkInterface> {
+        let state = self.inner.read().await;
+        state
+            .subscriptions
+            .get(subscription_id)?
+            .resource_groups
+            .get(resource_group)?
+            .network_interfaces
+            .get(name)
+            .cloned()
+    }
+
+    pub async fn list_network_interfaces(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+    ) -> Option<Page<NetworkInterface>> {
+        let state = self.inner.read().await;
+        let rg = state
+            .subscriptions
+            .get(subscription_id)?
+            .resource_groups
+            .get(resource_group)?;
+        let nics: Vec<NetworkInterface> = rg.network_interfaces.values().cloned().collect();
+        Some(Page::new(nics))
+    }
+
+    pub async fn delete_network_interface(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<bool, String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        Ok(rg.network_interfaces.remove(name).is_some())
+    }
+
+    // ── Public IP Addresses ───────────────────────────────────────────
+
+    pub async fn create_public_ip_address(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+        params: &CreatePublicIPAddressParams,
+    ) -> Result<(PublicIPAddress, bool), String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+
+        let ip_id = format!(
+            "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Network/publicIPAddresses/{name}"
+        );
+
+        let mut props = params.properties.clone();
+        props.provisioning_state = Some("Succeeded".to_string());
+        props.resource_guid = Some(uuid::Uuid::new_v4().to_string());
+
+        // Auto-generate IP address for Static allocation
+        let method = props
+            .public_ip_allocation_method
+            .as_deref()
+            .unwrap_or("Dynamic");
+        if method == "Static" && props.ip_address.is_none() {
+            props.ip_address = Some(Self::generate_mock_public_ip());
+        }
+
+        // Generate FQDN if dns_settings.domain_name_label is set
+        if let Some(ref mut dns) = props.dns_settings {
+            if let Some(ref label) = dns.domain_name_label {
+                if dns.fqdn.is_none() {
+                    dns.fqdn = Some(format!("{label}.eastus.cloudapp.azure.com"));
+                }
+            }
+        }
+
+        let is_new = !rg.public_ip_addresses.contains_key(name);
+
+        let ip = PublicIPAddress {
+            id: ip_id,
+            name: name.to_string(),
+            resource_type: "Microsoft.Network/publicIPAddresses".to_string(),
+            location: params.location.clone(),
+            tags: params.tags.clone(),
+            etag: Some("\"1\"".to_string()),
+            sku: params.sku.clone(),
+            zones: params.zones.clone(),
+            properties: props,
+        };
+
+        rg.public_ip_addresses.insert(name.to_string(), ip.clone());
+        Ok((ip, is_new))
+    }
+
+    pub async fn get_public_ip_address(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+    ) -> Option<PublicIPAddress> {
+        let state = self.inner.read().await;
+        state
+            .subscriptions
+            .get(subscription_id)?
+            .resource_groups
+            .get(resource_group)?
+            .public_ip_addresses
+            .get(name)
+            .cloned()
+    }
+
+    pub async fn list_public_ip_addresses(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+    ) -> Option<Page<PublicIPAddress>> {
+        let state = self.inner.read().await;
+        let rg = state
+            .subscriptions
+            .get(subscription_id)?
+            .resource_groups
+            .get(resource_group)?;
+        let ips: Vec<PublicIPAddress> = rg.public_ip_addresses.values().cloned().collect();
+        Some(Page::new(ips))
+    }
+
+    pub async fn delete_public_ip_address(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<bool, String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        Ok(rg.public_ip_addresses.remove(name).is_some())
+    }
+
     // ── Identity ───────────────────────────────────────────────────────
 
     pub async fn get_current_principal(&self) -> Principal {
@@ -1328,6 +1644,23 @@ state = "Enabled"
             }
         }
         None
+    }
+
+    /// Generate a deterministic-looking mock MAC address.
+    fn generate_mock_mac() -> String {
+        let u = uuid::Uuid::new_v4();
+        let bytes = u.as_bytes();
+        format!(
+            "{:02X}-{:02X}-{:02X}-{:02X}-{:02X}-{:02X}",
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]
+        )
+    }
+
+    /// Generate a mock public IP address (10.x.x.x range for test safety).
+    fn generate_mock_public_ip() -> String {
+        let u = uuid::Uuid::new_v4();
+        let bytes = u.as_bytes();
+        format!("20.{}.{}.{}", bytes[0], bytes[1], bytes[2])
     }
 
     fn find_storage_account_mut<'a>(

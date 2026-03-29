@@ -213,6 +213,33 @@ impl AzureMockServer {
                 "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/networkSecurityGroups",
                 get(networking::list_nsgs),
             )
+            // Security Rules (individual CRUD within NSGs)
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/networkSecurityGroups/{nsgName}/securityRules/{ruleName}",
+                put(networking::create_or_update_security_rule).get(networking::get_security_rule).delete(networking::delete_security_rule),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/networkSecurityGroups/{nsgName}/securityRules",
+                get(networking::list_security_rules),
+            )
+            // Network Interfaces
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/networkInterfaces/{nicName}",
+                put(networking::create_or_update_nic).get(networking::get_nic).delete(networking::delete_nic),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/networkInterfaces",
+                get(networking::list_nics),
+            )
+            // Public IP Addresses
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/publicIPAddresses/{ipName}",
+                put(networking::create_or_update_public_ip).get(networking::get_public_ip).delete(networking::delete_public_ip),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/publicIPAddresses",
+                get(networking::list_public_ips),
+            )
             // Identity
             .route("/me", get(identity::get_current_principal))
             .route(

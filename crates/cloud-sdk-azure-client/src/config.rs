@@ -158,6 +158,54 @@ impl AzureConfig {
         self.arm_base_url.join(&path).unwrap()
     }
 
+    pub fn security_rule_url(&self, rg: &str, nsg: &str, rule: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Network/networkSecurityGroups/{}/securityRules/{}",
+            self.subscription_id, rg, nsg, rule
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    pub fn security_rules_url(&self, rg: &str, nsg: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Network/networkSecurityGroups/{}/securityRules",
+            self.subscription_id, rg, nsg
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    pub fn network_interface_url(&self, rg: &str, nic: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Network/networkInterfaces/{}",
+            self.subscription_id, rg, nic
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    pub fn network_interfaces_url(&self, rg: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Network/networkInterfaces",
+            self.subscription_id, rg
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    pub fn public_ip_address_url(&self, rg: &str, ip: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Network/publicIPAddresses/{}",
+            self.subscription_id, rg, ip
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    pub fn public_ip_addresses_url(&self, rg: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Network/publicIPAddresses",
+            self.subscription_id, rg
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
     // ── Storage Account ARM URLs ───────────────────────────────────────
 
     /// ARM URL for a storage account.
