@@ -206,6 +206,76 @@ impl AzureConfig {
         self.arm_base_url.join(&path).unwrap()
     }
 
+    /// ARM URL for listing all VNets in a subscription.
+    pub fn virtual_networks_all_url(&self) -> Url {
+        let path = format!(
+            "subscriptions/{}/providers/Microsoft.Network/virtualNetworks",
+            self.subscription_id
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    /// ARM URL for listing all NSGs in a subscription.
+    pub fn nsgs_all_url(&self) -> Url {
+        let path = format!(
+            "subscriptions/{}/providers/Microsoft.Network/networkSecurityGroups",
+            self.subscription_id
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    // ── Route Table ARM URLs ────────────────────────────────────────────
+
+    pub fn route_table_url(&self, rg: &str, table: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Network/routeTables/{}",
+            self.subscription_id, rg, table
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    pub fn route_tables_url(&self, rg: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Network/routeTables",
+            self.subscription_id, rg
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    pub fn route_url(&self, rg: &str, table: &str, route: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Network/routeTables/{}/routes/{}",
+            self.subscription_id, rg, table, route
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    pub fn routes_url(&self, rg: &str, table: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Network/routeTables/{}/routes",
+            self.subscription_id, rg, table
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    // ── VNet Peering ARM URLs ────────────────────────────────────���──────
+
+    pub fn virtual_network_peering_url(&self, rg: &str, vnet: &str, peering: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Network/virtualNetworks/{}/virtualNetworkPeerings/{}",
+            self.subscription_id, rg, vnet, peering
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    pub fn virtual_network_peerings_url(&self, rg: &str, vnet: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Network/virtualNetworks/{}/virtualNetworkPeerings",
+            self.subscription_id, rg, vnet
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
     // ── Storage Account ARM URLs ───────────────────────────────────────
 
     /// ARM URL for a storage account.

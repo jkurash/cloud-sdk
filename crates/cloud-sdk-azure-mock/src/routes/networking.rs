@@ -1,12 +1,14 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use cloud_sdk_core::services::networking::{
-    CreateNetworkInterfaceParams, CreateNsgParams, CreatePublicIPAddressParams,
-    CreateSecurityRuleParams, CreateSubnetParams, CreateVirtualNetworkParams,
+    CreateNetworkInterfaceParams, CreateNsgParams, CreatePublicIPAddressParams, CreateRouteParams,
+    CreateRouteTableParams, CreateSecurityRuleParams, CreateSubnetParams,
+    CreateVirtualNetworkParams, CreateVirtualNetworkPeeringParams,
 };
 use http::StatusCode;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::error_response;
@@ -542,6 +544,411 @@ pub async fn delete_public_ip(
             StatusCode::NOT_FOUND,
             "ResourceNotFound",
             &format!("Public IP address '{ip_name}' not found."),
+        ),
+        Err(msg) => error_response(StatusCode::NOT_FOUND, "ResourceNotFound", &msg),
+    }
+}
+
+// ── VNet extended operations ──────────────────────────────────────────
+
+pub async fn list_all_vnets(
+    State(state): State<Arc<MockState>>,
+    Path(sub_id): Path<String>,
+) -> axum::response::Response {
+    match state.list_all_virtual_networks(&sub_id).await {
+        Some(page) => {
+            let json = serde_json::to_string(&page).unwrap();
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            "SubscriptionNotFound",
+            &format!("Subscription '{sub_id}' not found."),
+        ),
+    }
+}
+
+pub async fn update_vnet_tags(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, vnet_name)): Path<(String, String, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> axum::response::Response {
+    let tags: HashMap<String, String> = body
+        .get("tags")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    match state
+        .update_virtual_network_tags(&sub_id, &rg, &vnet_name, tags)
+        .await
+    {
+        Ok(vnet) => {
+            let json = serde_json::to_string(&vnet).unwrap();
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        Err(msg) => error_response(StatusCode::NOT_FOUND, "ResourceNotFound", &msg),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct CheckIpQuery {
+    #[serde(rename = "ipAddress")]
+    pub ip_address: String,
+}
+
+pub async fn check_ip_availability(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, vnet_name)): Path<(String, String, String)>,
+    Query(query): Query<CheckIpQuery>,
+) -> axum::response::Response {
+    match state
+        .check_ip_availability(&sub_id, &rg, &vnet_name, &query.ip_address)
+        .await
+    {
+        Ok((available, available_ips)) => {
+            let body = serde_json::json!({
+                "available": available,
+                "availableIPAddresses": available_ips,
+            });
+            let json = serde_json::to_string(&body).unwrap();
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        Err(msg) => error_response(StatusCode::NOT_FOUND, "ResourceNotFound", &msg),
+    }
+}
+
+// ── NSG extended operations ───────────────────────────────────────────
+
+pub async fn list_all_nsgs(
+    State(state): State<Arc<MockState>>,
+    Path(sub_id): Path<String>,
+) -> axum::response::Response {
+    match state.list_all_nsgs(&sub_id).await {
+        Some(page) => {
+            let json = serde_json::to_string(&page).unwrap();
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            "SubscriptionNotFound",
+            &format!("Subscription '{sub_id}' not found."),
+        ),
+    }
+}
+
+pub async fn update_nsg_tags(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, nsg_name)): Path<(String, String, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> axum::response::Response {
+    let tags: HashMap<String, String> = body
+        .get("tags")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    match state.update_nsg_tags(&sub_id, &rg, &nsg_name, tags).await {
+        Ok(nsg) => {
+            let json = serde_json::to_string(&nsg).unwrap();
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        Err(msg) => error_response(StatusCode::NOT_FOUND, "ResourceNotFound", &msg),
+    }
+}
+
+// ── Route Tables ──────────────���──────────────────────���────────────────
+
+pub async fn create_or_update_route_table(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, table_name)): Path<(String, String, String)>,
+    Json(params): Json<CreateRouteTableParams>,
+) -> axum::response::Response {
+    match state
+        .create_route_table(&sub_id, &rg, &table_name, &params)
+        .await
+    {
+        Ok((table, is_new)) => {
+            let status = if is_new {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            };
+            let json = serde_json::to_string(&table).unwrap();
+            axum::response::Response::builder()
+                .status(status)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        Err(msg) => error_response(StatusCode::NOT_FOUND, "ResourceNotFound", &msg),
+    }
+}
+
+pub async fn get_route_table(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, table_name)): Path<(String, String, String)>,
+) -> axum::response::Response {
+    match state.get_route_table(&sub_id, &rg, &table_name).await {
+        Some(table) => {
+            let json = serde_json::to_string(&table).unwrap();
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            "ResourceNotFound",
+            &format!("Route table '{table_name}' not found."),
+        ),
+    }
+}
+
+pub async fn list_route_tables(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg)): Path<(String, String)>,
+) -> axum::response::Response {
+    match state.list_route_tables(&sub_id, &rg).await {
+        Some(page) => {
+            let json = serde_json::to_string(&page).unwrap();
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            "ResourceGroupNotFound",
+            &format!("Resource group '{rg}' not found."),
+        ),
+    }
+}
+
+pub async fn delete_route_table(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, table_name)): Path<(String, String, String)>,
+) -> axum::response::Response {
+    match state.delete_route_table(&sub_id, &rg, &table_name).await {
+        Ok(true) => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .body(axum::body::Body::empty())
+            .unwrap(),
+        Ok(false) => error_response(
+            StatusCode::NOT_FOUND,
+            "ResourceNotFound",
+            &format!("Route table '{table_name}' not found."),
+        ),
+        Err(msg) => error_response(StatusCode::NOT_FOUND, "ResourceNotFound", &msg),
+    }
+}
+
+// ── Routes (within Route Tables) ──────────────────────────────────────
+
+pub async fn create_or_update_route(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, table_name, route_name)): Path<(String, String, String, String)>,
+    Json(params): Json<CreateRouteParams>,
+) -> axum::response::Response {
+    match state
+        .create_route(&sub_id, &rg, &table_name, &route_name, &params)
+        .await
+    {
+        Ok((route, is_new)) => {
+            let status = if is_new {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            };
+            let json = serde_json::to_string(&route).unwrap();
+            axum::response::Response::builder()
+                .status(status)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        Err(msg) => error_response(StatusCode::NOT_FOUND, "ResourceNotFound", &msg),
+    }
+}
+
+pub async fn get_route(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, table_name, route_name)): Path<(String, String, String, String)>,
+) -> axum::response::Response {
+    match state
+        .get_route(&sub_id, &rg, &table_name, &route_name)
+        .await
+    {
+        Some(route) => {
+            let json = serde_json::to_string(&route).unwrap();
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            "ResourceNotFound",
+            &format!("Route '{route_name}' not found."),
+        ),
+    }
+}
+
+pub async fn list_routes(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, table_name)): Path<(String, String, String)>,
+) -> axum::response::Response {
+    match state.list_routes(&sub_id, &rg, &table_name).await {
+        Some(page) => {
+            let json = serde_json::to_string(&page).unwrap();
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            "ResourceNotFound",
+            &format!("Route table '{table_name}' not found."),
+        ),
+    }
+}
+
+pub async fn delete_route(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, table_name, route_name)): Path<(String, String, String, String)>,
+) -> axum::response::Response {
+    match state
+        .delete_route(&sub_id, &rg, &table_name, &route_name)
+        .await
+    {
+        Ok(true) => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .body(axum::body::Body::empty())
+            .unwrap(),
+        Ok(false) => error_response(
+            StatusCode::NOT_FOUND,
+            "ResourceNotFound",
+            &format!("Route '{route_name}' not found."),
+        ),
+        Err(msg) => error_response(StatusCode::NOT_FOUND, "ResourceNotFound", &msg),
+    }
+}
+
+// ── Virtual Network Peerings ───────��───────────────────────────��──────
+
+pub async fn create_or_update_peering(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, vnet_name, peering_name)): Path<(String, String, String, String)>,
+    Json(params): Json<CreateVirtualNetworkPeeringParams>,
+) -> axum::response::Response {
+    match state
+        .create_virtual_network_peering(&sub_id, &rg, &vnet_name, &peering_name, &params)
+        .await
+    {
+        Ok((peering, is_new)) => {
+            let status = if is_new {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            };
+            let json = serde_json::to_string(&peering).unwrap();
+            axum::response::Response::builder()
+                .status(status)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        Err(msg) => error_response(StatusCode::NOT_FOUND, "ResourceNotFound", &msg),
+    }
+}
+
+pub async fn get_peering(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, vnet_name, peering_name)): Path<(String, String, String, String)>,
+) -> axum::response::Response {
+    match state
+        .get_virtual_network_peering(&sub_id, &rg, &vnet_name, &peering_name)
+        .await
+    {
+        Some(peering) => {
+            let json = serde_json::to_string(&peering).unwrap();
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            "ResourceNotFound",
+            &format!("Virtual network peering '{peering_name}' not found."),
+        ),
+    }
+}
+
+pub async fn list_peerings(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, vnet_name)): Path<(String, String, String)>,
+) -> axum::response::Response {
+    match state
+        .list_virtual_network_peerings(&sub_id, &rg, &vnet_name)
+        .await
+    {
+        Some(page) => {
+            let json = serde_json::to_string(&page).unwrap();
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            "ResourceNotFound",
+            &format!("Virtual network '{vnet_name}' not found."),
+        ),
+    }
+}
+
+pub async fn delete_peering(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, vnet_name, peering_name)): Path<(String, String, String, String)>,
+) -> axum::response::Response {
+    match state
+        .delete_virtual_network_peering(&sub_id, &rg, &vnet_name, &peering_name)
+        .await
+    {
+        Ok(true) => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .body(axum::body::Body::empty())
+            .unwrap(),
+        Ok(false) => error_response(
+            StatusCode::NOT_FOUND,
+            "ResourceNotFound",
+            &format!("Virtual network peering '{peering_name}' not found."),
         ),
         Err(msg) => error_response(StatusCode::NOT_FOUND, "ResourceNotFound", &msg),
     }

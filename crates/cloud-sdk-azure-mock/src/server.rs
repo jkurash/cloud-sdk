@@ -189,11 +189,21 @@ impl AzureMockServer {
             // Virtual Networks
             .route(
                 "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/virtualNetworks/{vnetName}",
-                put(networking::create_or_update_vnet).get(networking::get_vnet).delete(networking::delete_vnet),
+                put(networking::create_or_update_vnet).get(networking::get_vnet).delete(networking::delete_vnet).patch(networking::update_vnet_tags),
             )
             .route(
                 "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/virtualNetworks",
                 get(networking::list_vnets),
+            )
+            // VNet — subscription-wide listing
+            .route(
+                "/subscriptions/{subscriptionId}/providers/Microsoft.Network/virtualNetworks",
+                get(networking::list_all_vnets),
+            )
+            // VNet — check IP availability
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/virtualNetworks/{vnetName}/CheckIPAddressAvailability",
+                get(networking::check_ip_availability),
             )
             // Subnets
             .route(
@@ -207,11 +217,16 @@ impl AzureMockServer {
             // Network Security Groups
             .route(
                 "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/networkSecurityGroups/{nsgName}",
-                put(networking::create_or_update_nsg).get(networking::get_nsg).delete(networking::delete_nsg),
+                put(networking::create_or_update_nsg).get(networking::get_nsg).delete(networking::delete_nsg).patch(networking::update_nsg_tags),
             )
             .route(
                 "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/networkSecurityGroups",
                 get(networking::list_nsgs),
+            )
+            // NSG — subscription-wide listing
+            .route(
+                "/subscriptions/{subscriptionId}/providers/Microsoft.Network/networkSecurityGroups",
+                get(networking::list_all_nsgs),
             )
             // Security Rules (individual CRUD within NSGs)
             .route(
@@ -239,6 +254,33 @@ impl AzureMockServer {
             .route(
                 "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/publicIPAddresses",
                 get(networking::list_public_ips),
+            )
+            // Route Tables
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/routeTables/{tableName}",
+                put(networking::create_or_update_route_table).get(networking::get_route_table).delete(networking::delete_route_table),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/routeTables",
+                get(networking::list_route_tables),
+            )
+            // Routes (within Route Tables)
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/routeTables/{tableName}/routes/{routeName}",
+                put(networking::create_or_update_route).get(networking::get_route).delete(networking::delete_route),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/routeTables/{tableName}/routes",
+                get(networking::list_routes),
+            )
+            // Virtual Network Peerings
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/virtualNetworks/{vnetName}/virtualNetworkPeerings/{peeringName}",
+                put(networking::create_or_update_peering).get(networking::get_peering).delete(networking::delete_peering),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/virtualNetworks/{vnetName}/virtualNetworkPeerings",
+                get(networking::list_peerings),
             )
             // Identity
             .route("/me", get(identity::get_current_principal))

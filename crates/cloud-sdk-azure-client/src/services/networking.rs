@@ -1,6 +1,7 @@
 use cloud_sdk_core::error::CloudSdkError;
 use cloud_sdk_core::models::Page;
 use cloud_sdk_core::services::networking::*;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::client::AzureClient;
@@ -64,6 +65,25 @@ impl NetworkingService for AzureNetworkingService {
             .config()
             .virtual_network_url(resource_group, name);
         self.client.delete(url, API_VERSION).await
+    }
+
+    async fn list_all_virtual_networks(&self) -> Result<Page<VirtualNetwork>, CloudSdkError> {
+        let url = self.client.config().virtual_networks_all_url();
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn update_virtual_network_tags(
+        &self,
+        resource_group: &str,
+        name: &str,
+        tags: HashMap<String, String>,
+    ) -> Result<VirtualNetwork, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .virtual_network_url(resource_group, name);
+        let body = serde_json::json!({ "tags": tags });
+        self.client.patch(url, API_VERSION, &body).await
     }
 
     // ── Subnets ────────────────────────────────────────────────────────
@@ -155,6 +175,24 @@ impl NetworkingService for AzureNetworkingService {
     ) -> Result<(), CloudSdkError> {
         let url = self.client.config().nsg_url(resource_group, name);
         self.client.delete(url, API_VERSION).await
+    }
+
+    async fn list_all_network_security_groups(
+        &self,
+    ) -> Result<Page<NetworkSecurityGroup>, CloudSdkError> {
+        let url = self.client.config().nsgs_all_url();
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn update_nsg_tags(
+        &self,
+        resource_group: &str,
+        name: &str,
+        tags: HashMap<String, String>,
+    ) -> Result<NetworkSecurityGroup, CloudSdkError> {
+        let url = self.client.config().nsg_url(resource_group, name);
+        let body = serde_json::json!({ "tags": tags });
+        self.client.patch(url, API_VERSION, &body).await
     }
 
     // ── Security Rules ────────────────────────────────────────────────
@@ -305,6 +343,155 @@ impl NetworkingService for AzureNetworkingService {
             .client
             .config()
             .public_ip_address_url(resource_group, name);
+        self.client.delete(url, API_VERSION).await
+    }
+
+    // ── Route Tables ─────────────────────────────────────────────────
+
+    async fn create_route_table(
+        &self,
+        resource_group: &str,
+        name: &str,
+        params: CreateRouteTableParams,
+    ) -> Result<RouteTable, CloudSdkError> {
+        let url = self.client.config().route_table_url(resource_group, name);
+        let (table, _) = self.client.put(url, API_VERSION, &params).await?;
+        Ok(table)
+    }
+
+    async fn get_route_table(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<RouteTable, CloudSdkError> {
+        let url = self.client.config().route_table_url(resource_group, name);
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn list_route_tables(
+        &self,
+        resource_group: &str,
+    ) -> Result<Page<RouteTable>, CloudSdkError> {
+        let url = self.client.config().route_tables_url(resource_group);
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn delete_route_table(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<(), CloudSdkError> {
+        let url = self.client.config().route_table_url(resource_group, name);
+        self.client.delete(url, API_VERSION).await
+    }
+
+    // ── Routes (within Route Tables) ─────────────────────────────────
+
+    async fn create_route(
+        &self,
+        resource_group: &str,
+        table_name: &str,
+        route_name: &str,
+        params: CreateRouteParams,
+    ) -> Result<Route, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .route_url(resource_group, table_name, route_name);
+        let (route, _) = self.client.put(url, API_VERSION, &params).await?;
+        Ok(route)
+    }
+
+    async fn get_route(
+        &self,
+        resource_group: &str,
+        table_name: &str,
+        route_name: &str,
+    ) -> Result<Route, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .route_url(resource_group, table_name, route_name);
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn list_routes(
+        &self,
+        resource_group: &str,
+        table_name: &str,
+    ) -> Result<Page<Route>, CloudSdkError> {
+        let url = self.client.config().routes_url(resource_group, table_name);
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn delete_route(
+        &self,
+        resource_group: &str,
+        table_name: &str,
+        route_name: &str,
+    ) -> Result<(), CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .route_url(resource_group, table_name, route_name);
+        self.client.delete(url, API_VERSION).await
+    }
+
+    // ── Virtual Network Peerings ─────────────────────────────────────
+
+    async fn create_virtual_network_peering(
+        &self,
+        resource_group: &str,
+        vnet_name: &str,
+        peering_name: &str,
+        params: CreateVirtualNetworkPeeringParams,
+    ) -> Result<VirtualNetworkPeering, CloudSdkError> {
+        let url = self.client.config().virtual_network_peering_url(
+            resource_group,
+            vnet_name,
+            peering_name,
+        );
+        let (peering, _) = self.client.put(url, API_VERSION, &params).await?;
+        Ok(peering)
+    }
+
+    async fn get_virtual_network_peering(
+        &self,
+        resource_group: &str,
+        vnet_name: &str,
+        peering_name: &str,
+    ) -> Result<VirtualNetworkPeering, CloudSdkError> {
+        let url = self.client.config().virtual_network_peering_url(
+            resource_group,
+            vnet_name,
+            peering_name,
+        );
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn list_virtual_network_peerings(
+        &self,
+        resource_group: &str,
+        vnet_name: &str,
+    ) -> Result<Page<VirtualNetworkPeering>, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .virtual_network_peerings_url(resource_group, vnet_name);
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn delete_virtual_network_peering(
+        &self,
+        resource_group: &str,
+        vnet_name: &str,
+        peering_name: &str,
+    ) -> Result<(), CloudSdkError> {
+        let url = self.client.config().virtual_network_peering_url(
+            resource_group,
+            vnet_name,
+            peering_name,
+        );
         self.client.delete(url, API_VERSION).await
     }
 }

@@ -6,9 +6,11 @@ use cloud_sdk_core::models::resource::{
 use cloud_sdk_core::services::compute::{CreateVirtualMachineParams, PowerState, VirtualMachine};
 use cloud_sdk_core::services::identity::{Principal, PrincipalType, RoleAssignment};
 use cloud_sdk_core::services::networking::{
-    CreateNetworkInterfaceParams, CreateNsgParams, CreatePublicIPAddressParams,
-    CreateSecurityRuleParams, CreateSubnetParams, CreateVirtualNetworkParams, NetworkInterface,
-    NetworkSecurityGroup, PublicIPAddress, SecurityRule, Subnet, SubnetProperties, VirtualNetwork,
+    CreateNetworkInterfaceParams, CreateNsgParams, CreatePublicIPAddressParams, CreateRouteParams,
+    CreateRouteTableParams, CreateSecurityRuleParams, CreateSubnetParams,
+    CreateVirtualNetworkParams, CreateVirtualNetworkPeeringParams, NetworkInterface,
+    NetworkSecurityGroup, PublicIPAddress, Route, RouteTable, SecurityRule, Subnet,
+    SubnetProperties, VirtualNetwork, VirtualNetworkPeering,
 };
 use cloud_sdk_core::services::storage::{
     BlobContainer, BlobProperties, CreateStorageAccountParams, StorageAccount,
@@ -59,11 +61,18 @@ struct ResourceGroupState {
     network_security_groups: HashMap<String, NetworkSecurityGroup>,
     network_interfaces: HashMap<String, NetworkInterface>,
     public_ip_addresses: HashMap<String, PublicIPAddress>,
+    route_tables: HashMap<String, RouteTableState>,
 }
 
 struct VnetState {
     metadata: VirtualNetwork,
     subnets: HashMap<String, Subnet>,
+    peerings: HashMap<String, VirtualNetworkPeering>,
+}
+
+struct RouteTableState {
+    metadata: RouteTable,
+    routes: HashMap<String, Route>,
 }
 
 struct VmState {
@@ -126,6 +135,7 @@ impl MockState {
                         network_security_groups: HashMap::new(),
                         network_interfaces: HashMap::new(),
                         public_ip_addresses: HashMap::new(),
+                        route_tables: HashMap::new(),
                     },
                 );
             }
@@ -237,6 +247,7 @@ state = "Enabled"
                 network_security_groups: HashMap::new(),
                 network_interfaces: HashMap::new(),
                 public_ip_addresses: HashMap::new(),
+                route_tables: HashMap::new(),
             },
         );
 
@@ -1077,6 +1088,7 @@ state = "Enabled"
             VnetState {
                 metadata: vnet.clone(),
                 subnets: subnets_from_props,
+                peerings: HashMap::new(),
             },
         );
         Ok((vnet, is_new))
@@ -1600,6 +1612,408 @@ state = "Enabled"
         let mut state = self.inner.write().await;
         let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
         Ok(rg.public_ip_addresses.remove(name).is_some())
+    }
+
+    // ── VNet extended operations ─────────────────────────────────────
+
+    /// List all virtual networks across all resource groups in a subscription.
+    pub async fn list_all_virtual_networks(
+        &self,
+        subscription_id: &str,
+    ) -> Option<Page<VirtualNetwork>> {
+        let state = self.inner.read().await;
+        let sub = state.subscriptions.get(subscription_id)?;
+        let vnets: Vec<VirtualNetwork> = sub
+            .resource_groups
+            .values()
+            .flat_map(|rg| {
+                rg.virtual_networks.values().map(|vs| {
+                    let mut v = vs.metadata.clone();
+                    v.properties.subnets = vs.subnets.values().cloned().collect();
+                    v
+                })
+            })
+            .collect();
+        Some(Page::new(vnets))
+    }
+
+    /// PATCH update — merge tags into the virtual network.
+    pub async fn update_virtual_network_tags(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+        tags: HashMap<String, String>,
+    ) -> Result<VirtualNetwork, String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        let vnet_state = rg
+            .virtual_networks
+            .get_mut(name)
+            .ok_or_else(|| format!("Virtual network '{name}' not found"))?;
+
+        for (k, v) in tags {
+            vnet_state.metadata.tags.insert(k, v);
+        }
+
+        let mut vnet = vnet_state.metadata.clone();
+        vnet.properties.subnets = vnet_state.subnets.values().cloned().collect();
+        Ok(vnet)
+    }
+
+    /// Check if an IP address is available within a virtual network.
+    /// Mock: returns available=true unless the IP matches a NIC's private IP.
+    pub async fn check_ip_availability(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        _vnet_name: &str,
+        ip_address: &str,
+    ) -> Result<(bool, Vec<String>), String> {
+        let state = self.inner.read().await;
+        let rg = state
+            .subscriptions
+            .get(subscription_id)
+            .and_then(|s| s.resource_groups.get(resource_group))
+            .ok_or_else(|| format!("Resource group '{resource_group}' not found"))?;
+
+        // Check all NICs in this RG for matching private IP
+        for nic in rg.network_interfaces.values() {
+            if let Some(ref ip_configs) = nic.properties.ip_configurations {
+                for ip_config in ip_configs {
+                    if let Some(ref props) = ip_config.properties {
+                        if props.private_ip_address.as_deref() == Some(ip_address) {
+                            return Ok((false, vec![]));
+                        }
+                    }
+                }
+            }
+        }
+        Ok((true, vec![]))
+    }
+
+    // ── NSG extended operations ───────────────────────────────────────
+
+    /// List all NSGs across all resource groups in a subscription.
+    pub async fn list_all_nsgs(&self, subscription_id: &str) -> Option<Page<NetworkSecurityGroup>> {
+        let state = self.inner.read().await;
+        let sub = state.subscriptions.get(subscription_id)?;
+        let nsgs: Vec<NetworkSecurityGroup> = sub
+            .resource_groups
+            .values()
+            .flat_map(|rg| rg.network_security_groups.values().cloned())
+            .collect();
+        Some(Page::new(nsgs))
+    }
+
+    /// PATCH update — merge tags into the NSG.
+    pub async fn update_nsg_tags(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+        tags: HashMap<String, String>,
+    ) -> Result<NetworkSecurityGroup, String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        let nsg = rg
+            .network_security_groups
+            .get_mut(name)
+            .ok_or_else(|| format!("NSG '{name}' not found"))?;
+
+        for (k, v) in tags {
+            nsg.tags.insert(k, v);
+        }
+
+        Ok(nsg.clone())
+    }
+
+    // ── Route Tables ─────────────────────────────────────────────────
+
+    pub async fn create_route_table(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+        params: &CreateRouteTableParams,
+    ) -> Result<(RouteTable, bool), String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+
+        let table_id = format!(
+            "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Network/routeTables/{name}"
+        );
+
+        let mut props = params.properties.clone();
+        props.provisioning_state = Some("Succeeded".to_string());
+        props.resource_guid = Some(uuid::Uuid::new_v4().to_string());
+
+        let table = RouteTable {
+            id: table_id,
+            name: name.to_string(),
+            resource_type: "Microsoft.Network/routeTables".to_string(),
+            location: params.location.clone(),
+            tags: params.tags.clone(),
+            etag: Some("\"1\"".to_string()),
+            properties: props,
+        };
+
+        let is_new = !rg.route_tables.contains_key(name);
+
+        // Extract routes from properties into the separate map
+        let routes: HashMap<String, Route> = table
+            .properties
+            .routes
+            .as_ref()
+            .map(|rs| {
+                rs.iter()
+                    .filter_map(|r| r.name.clone().map(|n| (n, r.clone())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        rg.route_tables.insert(
+            name.to_string(),
+            RouteTableState {
+                metadata: table.clone(),
+                routes,
+            },
+        );
+
+        Ok((table, is_new))
+    }
+
+    pub async fn get_route_table(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+    ) -> Option<RouteTable> {
+        let state = self.inner.read().await;
+        let ts = state
+            .subscriptions
+            .get(subscription_id)?
+            .resource_groups
+            .get(resource_group)?
+            .route_tables
+            .get(name)?;
+        let mut table = ts.metadata.clone();
+        table.properties.routes = Some(ts.routes.values().cloned().collect());
+        Some(table)
+    }
+
+    pub async fn list_route_tables(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+    ) -> Option<Page<RouteTable>> {
+        let state = self.inner.read().await;
+        let rg = state
+            .subscriptions
+            .get(subscription_id)?
+            .resource_groups
+            .get(resource_group)?;
+        let tables: Vec<RouteTable> = rg
+            .route_tables
+            .values()
+            .map(|ts| {
+                let mut t = ts.metadata.clone();
+                t.properties.routes = Some(ts.routes.values().cloned().collect());
+                t
+            })
+            .collect();
+        Some(Page::new(tables))
+    }
+
+    pub async fn delete_route_table(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<bool, String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        Ok(rg.route_tables.remove(name).is_some())
+    }
+
+    // ── Routes (within Route Tables) ─────────────────────────────────
+
+    pub async fn create_route(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        table_name: &str,
+        route_name: &str,
+        params: &CreateRouteParams,
+    ) -> Result<(Route, bool), String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        let table = rg
+            .route_tables
+            .get_mut(table_name)
+            .ok_or_else(|| format!("Route table '{table_name}' not found"))?;
+
+        let mut props = params.properties.clone();
+        props.provisioning_state = Some("Succeeded".to_string());
+
+        let route = Route {
+            id: Some(format!("{}/routes/{route_name}", table.metadata.id)),
+            name: Some(route_name.to_string()),
+            etag: Some("\"1\"".to_string()),
+            resource_type: Some("Microsoft.Network/routeTables/routes".to_string()),
+            properties: props,
+        };
+
+        let is_new = !table.routes.contains_key(route_name);
+        table.routes.insert(route_name.to_string(), route.clone());
+        Ok((route, is_new))
+    }
+
+    pub async fn get_route(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        table_name: &str,
+        route_name: &str,
+    ) -> Option<Route> {
+        let state = self.inner.read().await;
+        state
+            .subscriptions
+            .get(subscription_id)?
+            .resource_groups
+            .get(resource_group)?
+            .route_tables
+            .get(table_name)?
+            .routes
+            .get(route_name)
+            .cloned()
+    }
+
+    pub async fn list_routes(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        table_name: &str,
+    ) -> Option<Page<Route>> {
+        let state = self.inner.read().await;
+        let table = state
+            .subscriptions
+            .get(subscription_id)?
+            .resource_groups
+            .get(resource_group)?
+            .route_tables
+            .get(table_name)?;
+        Some(Page::new(table.routes.values().cloned().collect()))
+    }
+
+    pub async fn delete_route(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        table_name: &str,
+        route_name: &str,
+    ) -> Result<bool, String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        let table = rg
+            .route_tables
+            .get_mut(table_name)
+            .ok_or_else(|| format!("Route table '{table_name}' not found"))?;
+        Ok(table.routes.remove(route_name).is_some())
+    }
+
+    // ── Virtual Network Peerings ─────────────────────────────────────
+
+    pub async fn create_virtual_network_peering(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        vnet_name: &str,
+        peering_name: &str,
+        params: &CreateVirtualNetworkPeeringParams,
+    ) -> Result<(VirtualNetworkPeering, bool), String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        let vnet = rg
+            .virtual_networks
+            .get_mut(vnet_name)
+            .ok_or_else(|| format!("Virtual network '{vnet_name}' not found"))?;
+
+        let peering_id = format!("{}/virtualNetworkPeerings/{peering_name}", vnet.metadata.id);
+
+        let mut props = params.properties.clone();
+        props.provisioning_state = Some("Succeeded".to_string());
+        if props.peering_state.is_none() {
+            props.peering_state = Some("Connected".to_string());
+        }
+
+        let peering = VirtualNetworkPeering {
+            id: Some(peering_id),
+            name: Some(peering_name.to_string()),
+            etag: Some("\"1\"".to_string()),
+            resource_type: Some(
+                "Microsoft.Network/virtualNetworks/virtualNetworkPeerings".to_string(),
+            ),
+            properties: Some(props),
+        };
+
+        let is_new = !vnet.peerings.contains_key(peering_name);
+        vnet.peerings
+            .insert(peering_name.to_string(), peering.clone());
+        Ok((peering, is_new))
+    }
+
+    pub async fn get_virtual_network_peering(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        vnet_name: &str,
+        peering_name: &str,
+    ) -> Option<VirtualNetworkPeering> {
+        let state = self.inner.read().await;
+        state
+            .subscriptions
+            .get(subscription_id)?
+            .resource_groups
+            .get(resource_group)?
+            .virtual_networks
+            .get(vnet_name)?
+            .peerings
+            .get(peering_name)
+            .cloned()
+    }
+
+    pub async fn list_virtual_network_peerings(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        vnet_name: &str,
+    ) -> Option<Page<VirtualNetworkPeering>> {
+        let state = self.inner.read().await;
+        let vnet = state
+            .subscriptions
+            .get(subscription_id)?
+            .resource_groups
+            .get(resource_group)?
+            .virtual_networks
+            .get(vnet_name)?;
+        Some(Page::new(vnet.peerings.values().cloned().collect()))
+    }
+
+    pub async fn delete_virtual_network_peering(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        vnet_name: &str,
+        peering_name: &str,
+    ) -> Result<bool, String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        let vnet = rg
+            .virtual_networks
+            .get_mut(vnet_name)
+            .ok_or_else(|| format!("Virtual network '{vnet_name}' not found"))?;
+        Ok(vnet.peerings.remove(peering_name).is_some())
     }
 
     // ── Identity ───────────────────────────────────────────────────────

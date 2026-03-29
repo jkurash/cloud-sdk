@@ -1,9 +1,13 @@
+use std::collections::HashMap;
+
 use crate::error::CloudSdkError;
 use crate::models::Page;
 
 use super::nic::{CreateNetworkInterfaceParams, NetworkInterface};
 use super::nsg::{CreateNsgParams, CreateSecurityRuleParams, NetworkSecurityGroup, SecurityRule};
+use super::peering::{CreateVirtualNetworkPeeringParams, VirtualNetworkPeering};
 use super::public_ip::{CreatePublicIPAddressParams, PublicIPAddress};
+use super::route_table::{CreateRouteParams, CreateRouteTableParams, Route, RouteTable};
 use super::subnet::{CreateSubnetParams, Subnet};
 use super::vnet::{CreateVirtualNetworkParams, VirtualNetwork};
 
@@ -34,6 +38,17 @@ pub trait NetworkingService: Send + Sync {
         resource_group: &str,
         name: &str,
     ) -> impl std::future::Future<Output = Result<(), CloudSdkError>> + Send;
+
+    fn list_all_virtual_networks(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Page<VirtualNetwork>, CloudSdkError>> + Send;
+
+    fn update_virtual_network_tags(
+        &self,
+        resource_group: &str,
+        name: &str,
+        tags: HashMap<String, String>,
+    ) -> impl std::future::Future<Output = Result<VirtualNetwork, CloudSdkError>> + Send;
 
     // ── Subnets ───────────────────────────────────────────────────────
 
@@ -90,6 +105,17 @@ pub trait NetworkingService: Send + Sync {
         resource_group: &str,
         name: &str,
     ) -> impl std::future::Future<Output = Result<(), CloudSdkError>> + Send;
+
+    fn list_all_network_security_groups(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Page<NetworkSecurityGroup>, CloudSdkError>> + Send;
+
+    fn update_nsg_tags(
+        &self,
+        resource_group: &str,
+        name: &str,
+        tags: HashMap<String, String>,
+    ) -> impl std::future::Future<Output = Result<NetworkSecurityGroup, CloudSdkError>> + Send;
 
     // ── Security Rules (individual CRUD within NSGs) ──────────────────
 
@@ -171,5 +197,91 @@ pub trait NetworkingService: Send + Sync {
         &self,
         resource_group: &str,
         name: &str,
+    ) -> impl std::future::Future<Output = Result<(), CloudSdkError>> + Send;
+
+    // ── Route Tables ─────────────────────────────────────────────────
+
+    fn create_route_table(
+        &self,
+        resource_group: &str,
+        name: &str,
+        params: CreateRouteTableParams,
+    ) -> impl std::future::Future<Output = Result<RouteTable, CloudSdkError>> + Send;
+
+    fn get_route_table(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<RouteTable, CloudSdkError>> + Send;
+
+    fn list_route_tables(
+        &self,
+        resource_group: &str,
+    ) -> impl std::future::Future<Output = Result<Page<RouteTable>, CloudSdkError>> + Send;
+
+    fn delete_route_table(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<(), CloudSdkError>> + Send;
+
+    // ── Routes (within Route Tables) ─────────────────────────────────
+
+    fn create_route(
+        &self,
+        resource_group: &str,
+        table_name: &str,
+        route_name: &str,
+        params: CreateRouteParams,
+    ) -> impl std::future::Future<Output = Result<Route, CloudSdkError>> + Send;
+
+    fn get_route(
+        &self,
+        resource_group: &str,
+        table_name: &str,
+        route_name: &str,
+    ) -> impl std::future::Future<Output = Result<Route, CloudSdkError>> + Send;
+
+    fn list_routes(
+        &self,
+        resource_group: &str,
+        table_name: &str,
+    ) -> impl std::future::Future<Output = Result<Page<Route>, CloudSdkError>> + Send;
+
+    fn delete_route(
+        &self,
+        resource_group: &str,
+        table_name: &str,
+        route_name: &str,
+    ) -> impl std::future::Future<Output = Result<(), CloudSdkError>> + Send;
+
+    // ── Virtual Network Peerings ─────────────────────────────────────
+
+    fn create_virtual_network_peering(
+        &self,
+        resource_group: &str,
+        vnet_name: &str,
+        peering_name: &str,
+        params: CreateVirtualNetworkPeeringParams,
+    ) -> impl std::future::Future<Output = Result<VirtualNetworkPeering, CloudSdkError>> + Send;
+
+    fn get_virtual_network_peering(
+        &self,
+        resource_group: &str,
+        vnet_name: &str,
+        peering_name: &str,
+    ) -> impl std::future::Future<Output = Result<VirtualNetworkPeering, CloudSdkError>> + Send;
+
+    fn list_virtual_network_peerings(
+        &self,
+        resource_group: &str,
+        vnet_name: &str,
+    ) -> impl std::future::Future<Output = Result<Page<VirtualNetworkPeering>, CloudSdkError>> + Send;
+
+    fn delete_virtual_network_peering(
+        &self,
+        resource_group: &str,
+        vnet_name: &str,
+        peering_name: &str,
     ) -> impl std::future::Future<Output = Result<(), CloudSdkError>> + Send;
 }
