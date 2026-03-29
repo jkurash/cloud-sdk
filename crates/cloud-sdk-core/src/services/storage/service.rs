@@ -3,59 +3,12 @@ use crate::models::Page;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-// --- ARM-level resources (management plane) ---
+use super::blobs::{BlobContainer, BlobProperties};
+use super::identity::StorageAccountIdentity;
+use super::models::{ExtendedLocation, StorageAccount, StorageSku};
+use super::properties::StorageAccountProperties;
 
-/// Storage account resource.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StorageAccount {
-    pub id: String,
-    pub name: String,
-    #[serde(rename = "type")]
-    pub resource_type: String,
-    pub location: String,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub tags: HashMap<String, String>,
-    pub kind: String,
-    pub sku: StorageSku,
-    pub properties: StorageAccountProperties,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StorageSku {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tier: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StorageAccountProperties {
-    #[serde(
-        rename = "provisioningState",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub provisioning_state: Option<String>,
-    #[serde(
-        rename = "primaryEndpoints",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub primary_endpoints: Option<StorageEndpoints>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StorageEndpoints {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blob: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub queue: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub table: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file: Option<String>,
-}
-
-/// Parameters for creating a storage account.
+/// Parameters for creating a storage account (PUT request body).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateStorageAccountParams {
     pub location: String,
@@ -63,40 +16,16 @@ pub struct CreateStorageAccountParams {
     pub sku: StorageSku,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tags: HashMap<String, String>,
-}
-
-// --- Data plane resources (blob storage) ---
-
-/// Blob container.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlobContainer {
-    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub properties: Option<StorageAccountProperties>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<StorageAccountIdentity>,
     #[serde(
-        rename = "lastModified",
+        rename = "extendedLocation",
         default,
         skip_serializing_if = "Option::is_none"
     )]
-    pub last_modified: Option<String>,
-}
-
-/// Blob properties.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlobProperties {
-    pub name: String,
-    #[serde(rename = "contentLength", default)]
-    pub content_length: u64,
-    #[serde(
-        rename = "contentType",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub content_type: Option<String>,
-    #[serde(
-        rename = "lastModified",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub last_modified: Option<String>,
+    pub extended_location: Option<ExtendedLocation>,
 }
 
 /// Operations for managing storage accounts and blob storage.

@@ -80,11 +80,42 @@ impl AzureMockServer {
                 "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Storage/storageAccounts/{accountName}",
                 put(storage_accounts::create_or_update)
                     .get(storage_accounts::get)
-                    .delete(storage_accounts::delete),
+                    .delete(storage_accounts::delete)
+                    .patch(storage_accounts::update),
             )
             .route(
                 "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Storage/storageAccounts",
                 get(storage_accounts::list),
+            )
+            // Storage Accounts — subscription-wide
+            .route(
+                "/subscriptions/{subscriptionId}/providers/Microsoft.Storage/storageAccounts",
+                get(storage_accounts::list_all),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/providers/Microsoft.Storage/checkNameAvailability",
+                post(storage_accounts::check_name_availability),
+            )
+            // Storage Accounts — key & SAS operations
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Storage/storageAccounts/{accountName}/listKeys",
+                post(storage_accounts::list_keys),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Storage/storageAccounts/{accountName}/regenerateKey",
+                post(storage_accounts::regenerate_key),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Storage/storageAccounts/{accountName}/ListAccountSas",
+                post(storage_accounts::list_account_sas),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Storage/storageAccounts/{accountName}/ListServiceSas",
+                post(storage_accounts::list_service_sas),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Storage/storageAccounts/{accountName}/revokeUserDelegationKeys",
+                post(storage_accounts::revoke_user_delegation_keys),
             )
             // Virtual Machines (ARM) — CRUD
             .route(

@@ -92,12 +92,14 @@ fn vm_params() -> CreateVirtualMachineParams {
             extensions_time_budget: None,
             instance_view: None,
             platform_fault_domain: None,
+            scheduled_events_policy: None,
         },
         tags: HashMap::new(),
         zones: None,
         identity: None,
         extended_location: None,
         plan: None,
+        placement: None,
     }
 }
 

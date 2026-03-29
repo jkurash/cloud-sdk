@@ -4,8 +4,10 @@ pub mod networking;
 pub mod resource_manager;
 pub mod storage;
 
-pub use compute::*;
-pub use identity::*;
-pub use networking::*;
-pub use resource_manager::*;
-pub use storage::*;
+// Re-export service traits and commonly-used types at the services level.
+// For type-specific imports, use the full path: e.g., services::compute::VirtualMachine
+pub use compute::ComputeService;
+pub use identity::IdentityService;
+pub use networking::NetworkingService;
+pub use resource_manager::ResourceManagerService;
+pub use storage::StorageService;

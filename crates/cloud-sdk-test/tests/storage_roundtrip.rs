@@ -13,6 +13,9 @@ fn storage_params() -> CreateStorageAccountParams {
             tier: Some("Standard".to_string()),
         },
         tags: HashMap::new(),
+        properties: None,
+        identity: None,
+        extended_location: None,
     }
 }
 

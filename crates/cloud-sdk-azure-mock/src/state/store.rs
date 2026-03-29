@@ -328,14 +328,52 @@ state = "Enabled"
                 name: params.sku.name.clone(),
                 tier: params.sku.tier.clone(),
             },
+            identity: None,
+            extended_location: None,
             properties: StorageAccountProperties {
                 provisioning_state: Some("Succeeded".to_string()),
+                creation_time: Some(chrono::Utc::now().to_rfc3339()),
+                primary_location: Some(params.location.clone()),
+                secondary_location: None,
+                status_of_primary: Some("available".to_string()),
+                status_of_secondary: None,
                 primary_endpoints: Some(StorageEndpoints {
                     blob: Some(format!("http://127.0.0.1/{name}")),
-                    queue: None,
-                    table: None,
-                    file: None,
+                    queue: Some(format!("http://127.0.0.1/{name}-queue")),
+                    table: Some(format!("http://127.0.0.1/{name}-table")),
+                    file: Some(format!("http://127.0.0.1/{name}-file")),
+                    dfs: None,
+                    web: None,
+                    microsoft_endpoints: None,
+                    internet_endpoints: None,
                 }),
+                secondary_endpoints: None,
+                access_tier: None,
+                allow_blob_public_access: Some(false),
+                allow_shared_key_access: Some(true),
+                allow_cross_tenant_replication: Some(false),
+                default_to_oauth_authentication: None,
+                allowed_copy_scope: None,
+                minimum_tls_version: Some("TLS1_2".to_string()),
+                supports_https_traffic_only: Some(true),
+                network_acls: None,
+                public_network_access: Some("Enabled".to_string()),
+                dns_endpoint_type: None,
+                routing_preference: None,
+                encryption: None,
+                custom_domain: None,
+                azure_files_identity_based_authentication: None,
+                is_hns_enabled: None,
+                is_sftp_enabled: None,
+                is_nfs_v3_enabled: None,
+                is_local_user_enabled: None,
+                enable_extended_groups: None,
+                large_file_shares_state: None,
+                immutable_storage_with_versioning: None,
+                key_policy: None,
+                sas_policy: None,
+                key_creation_time: None,
+                failover_in_progress: None,
             },
         };
 
@@ -396,6 +434,96 @@ state = "Enabled"
         let mut state = self.inner.write().await;
         let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
         Ok(rg.storage_accounts.remove(name).is_some())
+    }
+
+    /// PATCH update — merges JSON into the stored storage account.
+    pub async fn update_storage_account(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+        patch: serde_json::Value,
+    ) -> Result<StorageAccount, String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        let sa_state = rg
+            .storage_accounts
+            .get_mut(name)
+            .ok_or_else(|| format!("Storage account '{name}' not found"))?;
+
+        let mut current = serde_json::to_value(&sa_state.metadata).unwrap();
+        json_merge(&mut current, &patch);
+        let updated: StorageAccount =
+            serde_json::from_value(current).map_err(|e| format!("failed to apply patch: {e}"))?;
+
+        sa_state.metadata = updated.clone();
+        Ok(updated)
+    }
+
+    /// List all storage accounts across all resource groups in a subscription.
+    pub async fn list_all_storage_accounts(
+        &self,
+        subscription_id: &str,
+    ) -> Option<Page<StorageAccount>> {
+        let state = self.inner.read().await;
+        let sub = state.subscriptions.get(subscription_id)?;
+        let accounts: Vec<StorageAccount> = sub
+            .resource_groups
+            .values()
+            .flat_map(|rg| rg.storage_accounts.values().map(|sa| sa.metadata.clone()))
+            .collect();
+        Some(Page::new(accounts))
+    }
+
+    /// Check if a storage account name is available.
+    pub async fn check_storage_name_availability(
+        &self,
+        name: &str,
+    ) -> (bool, Option<String>, Option<String>) {
+        let state = self.inner.read().await;
+        for sub in state.subscriptions.values() {
+            for rg in sub.resource_groups.values() {
+                if rg.storage_accounts.contains_key(name) {
+                    return (
+                        false,
+                        Some("AlreadyExists".to_string()),
+                        Some(format!(
+                            "The storage account named {name} is already taken."
+                        )),
+                    );
+                }
+            }
+        }
+        (true, None, None)
+    }
+
+    /// List storage account keys (mock generates deterministic keys).
+    pub async fn list_storage_keys(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<Vec<(String, String, String)>, String> {
+        let state = self.inner.read().await;
+        let _sa = state
+            .subscriptions
+            .get(subscription_id)
+            .and_then(|sub| sub.resource_groups.get(resource_group))
+            .and_then(|rg| rg.storage_accounts.get(name))
+            .ok_or_else(|| format!("Storage account '{name}' not found"))?;
+
+        Ok(vec![
+            (
+                "key1".to_string(),
+                format!("mockkey1{name}000000000000000000000000000000000000=="),
+                "FULL".to_string(),
+            ),
+            (
+                "key2".to_string(),
+                format!("mockkey2{name}000000000000000000000000000000000000=="),
+                "FULL".to_string(),
+            ),
+        ])
     }
 
     // ── Blob Containers (data plane) ───────────────────────────────────
@@ -610,6 +738,8 @@ state = "Enabled"
             plan: params.plan.clone(),
             properties: props,
             resources: Some(vec![]),
+            placement: params.placement.clone(),
+            system_data: None,
         };
 
         rg.virtual_machines.insert(
@@ -1451,6 +1581,9 @@ mod tests {
                 tier: Some("Standard".to_string()),
             },
             tags: HashMap::new(),
+            properties: None,
+            identity: None,
+            extended_location: None,
         }
     }
 
