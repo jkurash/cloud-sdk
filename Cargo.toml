@@ -1,0 +1,53 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/cloud-sdk-core",
+    "crates/cloud-sdk-azure-client",
+    "crates/cloud-sdk-azure-mock",
+    "crates/cloud-sdk-test",
+    "crates/cloud-sdk-cli",
+    "crates/cloud-sdk",
+]
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+version = "0.1.0"
+rust-version = "1.85"
+authors = ["Joshua Kurash"]
+
+[workspace.dependencies]
+# Internal crates
+cloud-sdk-core = { path = "crates/cloud-sdk-core", version = "0.1.0" }
+cloud-sdk-azure-client = { path = "crates/cloud-sdk-azure-client", version = "0.1.0" }
+cloud-sdk-azure-mock = { path = "crates/cloud-sdk-azure-mock", version = "0.1.0" }
+cloud-sdk-test = { path = "crates/cloud-sdk-test", version = "0.1.0" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Mock server
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+
+# Error handling
+thiserror = "2"
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+url = "2"
+bytes = "1"
+toml = "0.8"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

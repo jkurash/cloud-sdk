@@ -1,0 +1,16 @@
+[package]
+name = "cloud-sdk-test"
+description = "Test harness and integration test utilities for the cloud-sdk"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cloud-sdk-core = { workspace = true }
+cloud-sdk-azure-client = { workspace = true }
+cloud-sdk-azure-mock = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+bytes = { workspace = true }

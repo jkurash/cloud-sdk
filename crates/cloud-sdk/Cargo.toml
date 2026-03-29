@@ -1,0 +1,23 @@
+[package]
+name = "cloud-sdk"
+description = "Cloud-agnostic SDK for Rust — facade crate"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cloud-sdk-core = { workspace = true }
+
+[features]
+default = ["azure"]
+azure = ["dep:cloud-sdk-azure-client"]
+azure-mock = ["dep:cloud-sdk-azure-mock"]
+
+[dependencies.cloud-sdk-azure-client]
+workspace = true
+optional = true
+
+[dependencies.cloud-sdk-azure-mock]
+workspace = true
+optional = true

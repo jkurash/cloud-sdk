@@ -1,0 +1,15 @@
+[package]
+name = "cloud-sdk-core"
+description = "Core traits, error types, and models for the cloud-sdk"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+bytes = { workspace = true }
