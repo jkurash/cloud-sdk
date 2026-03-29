@@ -24,8 +24,8 @@ target
 # Added by cargo
 /target
 
-# Claude Code
-CLAUDE.md
+# Context files (CLAUDE.md, PLAN.md, etc.)
+.context/
 
 # Lock file
 Cargo.lock

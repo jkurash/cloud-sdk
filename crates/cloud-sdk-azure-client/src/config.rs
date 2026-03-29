@@ -81,6 +81,33 @@ impl AzureConfig {
         self.arm_base_url.join(&path).unwrap()
     }
 
+    /// ARM URL for listing all VMs in a subscription.
+    pub fn virtual_machines_all_url(&self) -> Url {
+        let path = format!(
+            "subscriptions/{}/providers/Microsoft.Compute/virtualMachines",
+            self.subscription_id
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    /// ARM URL for listing VMs by location.
+    pub fn virtual_machines_by_location_url(&self, location: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/providers/Microsoft.Compute/locations/{}/virtualMachines",
+            self.subscription_id, location
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    /// ARM URL for listing available VM sizes.
+    pub fn virtual_machine_sizes_url(&self, rg_name: &str, vm_name: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Compute/virtualMachines/{}/vmSizes",
+            self.subscription_id, rg_name, vm_name
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
     // ── Networking ARM URLs ──────────────────────────────────────────
 
     pub fn virtual_network_url(&self, rg: &str, vnet: &str) -> Url {

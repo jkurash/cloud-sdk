@@ -11,13 +11,18 @@ pub struct AzureMockConfig {
     pub subscriptions: HashMap<String, SubscriptionConfig>,
 }
 
-/// Server bind address and port.
+/// Server bind address, port, and behavior settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     #[serde(default = "default_bind")]
     pub bind: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    /// Response delay in milliseconds applied to every endpoint.
+    /// Simulates network latency for testing async client behavior.
+    /// Default: 0 (no delay).
+    #[serde(default)]
+    pub delay_ms: u64,
 }
 
 /// Configuration for a single subscription and its seed data.
@@ -107,6 +112,7 @@ impl Default for ServerConfig {
         Self {
             bind: default_bind(),
             port: default_port(),
+            delay_ms: 0,
         }
     }
 }

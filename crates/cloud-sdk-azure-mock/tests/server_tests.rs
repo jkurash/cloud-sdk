@@ -401,3 +401,68 @@ async fn patch_resource_group_tags() {
     assert_eq!(body["tags"]["env"], "staging");
     assert_eq!(body["location"], "eastus");
 }
+
+// ── OAuth token endpoint tests ─────────────────────────────────────────
+
+#[tokio::test]
+async fn oauth_token_with_valid_credentials() {
+    let (client, base) = start_server().await;
+
+    let resp = client
+        .post(format!("{base}/tenant-id/oauth2/v2.0/token"))
+        .form(&[
+            ("grant_type", "client_credentials"),
+            ("client_id", "my-app"),
+            ("client_secret", "my-secret"),
+            ("scope", "https://management.azure.com/.default"),
+        ])
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert!(body["access_token"].as_str().unwrap().contains("my-app"));
+    assert_eq!(body["token_type"], "Bearer");
+    assert_eq!(body["expires_in"], 3600);
+}
+
+#[tokio::test]
+async fn oauth_token_unsupported_grant_type() {
+    let (client, base) = start_server().await;
+
+    let resp = client
+        .post(format!("{base}/tenant-id/oauth2/v2.0/token"))
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("client_id", "my-app"),
+            ("client_secret", "my-secret"),
+        ])
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "unsupported_grant_type");
+}
+
+#[tokio::test]
+async fn oauth_token_missing_credentials() {
+    let (client, base) = start_server().await;
+
+    let resp = client
+        .post(format!("{base}/tenant-id/oauth2/v2.0/token"))
+        .form(&[
+            ("grant_type", "client_credentials"),
+            ("client_id", ""),
+            ("client_secret", ""),
+        ])
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 401);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "invalid_client");
+}

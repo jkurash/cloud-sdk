@@ -66,6 +66,7 @@ struct VnetState {
 struct VmState {
     metadata: VirtualMachine,
     power_state: PowerState,
+    etag_version: u64,
 }
 
 struct StorageAccountState {
@@ -523,27 +524,100 @@ state = "Enabled"
         let mut state = self.inner.write().await;
         let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
 
-        let vm_id = uuid::Uuid::new_v4().to_string();
-        let mut vm = VirtualMachine {
-            id: format!(
-                "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Compute/virtualMachines/{name}"
-            ),
+        let vm_resource_id = format!(
+            "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Compute/virtualMachines/{name}"
+        );
+        let is_new = !rg.virtual_machines.contains_key(name);
+        let etag_version = if is_new {
+            1
+        } else {
+            rg.virtual_machines
+                .get(name)
+                .map_or(1, |v| v.etag_version + 1)
+        };
+
+        let mut props = params.properties.clone();
+
+        // Server-generated: vmId, provisioningState, timeCreated
+        props.vm_id = Some(uuid::Uuid::new_v4().to_string());
+        props.provisioning_state = Some("Succeeded".to_string());
+        props.time_created = Some(chrono::Utc::now().to_rfc3339());
+
+        // Enrich osDisk: auto-generate managedDisk.id, infer osType, default diskSizeGB
+        if let Some(ref mut sp) = props.storage_profile {
+            if let Some(ref mut os_disk) = sp.os_disk {
+                // Auto-generate managedDisk.id from disk name
+                if let Some(ref mut md) = os_disk.managed_disk {
+                    if md.id.is_none() {
+                        let disk_name = os_disk.name.as_deref().unwrap_or("osdisk");
+                        md.id = Some(format!(
+                            "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Compute/disks/{disk_name}"
+                        ));
+                    }
+                }
+                // Infer osType from osProfile configuration
+                if os_disk.os_type.is_none() {
+                    if let Some(ref os_profile) = props.os_profile {
+                        if os_profile.linux_configuration.is_some() {
+                            os_disk.os_type = Some("Linux".to_string());
+                        } else if os_profile.windows_configuration.is_some() {
+                            os_disk.os_type = Some("Windows".to_string());
+                        }
+                    }
+                }
+                // Default diskSizeGB
+                if os_disk.disk_size_gb.is_none() {
+                    os_disk.disk_size_gb = Some(30);
+                }
+            }
+
+            // Enrich dataDisks: auto-generate managedDisk.id for each
+            if let Some(ref mut data_disks) = sp.data_disks {
+                for disk in data_disks.iter_mut() {
+                    if let Some(ref mut md) = disk.managed_disk {
+                        if md.id.is_none() {
+                            let fallback = format!("datadisk-lun{}", disk.lun);
+                            let disk_name = disk.name.as_deref().unwrap_or(&fallback);
+                            md.id = Some(format!(
+                                "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Compute/disks/{disk_name}"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Strip adminPassword from stored osProfile (write-only field)
+        if let Some(ref mut os_profile) = props.os_profile {
+            os_profile.admin_password = None;
+            // Default secrets to empty array if not provided
+            if os_profile.secrets.is_none() {
+                os_profile.secrets = Some(vec![]);
+            }
+        }
+
+        let vm = VirtualMachine {
+            id: vm_resource_id,
             name: name.to_string(),
             resource_type: "Microsoft.Compute/virtualMachines".to_string(),
             location: params.location.clone(),
             tags: params.tags.clone(),
-            properties: params.properties.clone(),
+            etag: Some(format!("\"{etag_version}\"")),
+            managed_by: None,
+            identity: params.identity.clone(),
+            zones: params.zones.clone(),
+            extended_location: params.extended_location.clone(),
+            plan: params.plan.clone(),
+            properties: props,
+            resources: Some(vec![]),
         };
-        // Set server-side fields
-        vm.properties.vm_id = Some(vm_id);
-        vm.properties.provisioning_state = Some("Succeeded".to_string());
 
-        let is_new = !rg.virtual_machines.contains_key(name);
         rg.virtual_machines.insert(
             name.to_string(),
             VmState {
                 metadata: vm.clone(),
                 power_state: PowerState::Running,
+                etag_version,
             },
         );
 
@@ -629,6 +703,204 @@ state = "Enabled"
             .ok_or_else(|| format!("Virtual machine '{name}' not found"))?;
         vm.power_state = power_state;
         Ok(())
+    }
+
+    /// PATCH update — merges the provided JSON into the stored VM.
+    pub async fn update_virtual_machine(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+        patch: serde_json::Value,
+    ) -> Result<VirtualMachine, String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        let vm_state = rg
+            .virtual_machines
+            .get_mut(name)
+            .ok_or_else(|| format!("Virtual machine '{name}' not found"))?;
+
+        // Serialize current VM to JSON, merge patch, deserialize back
+        let mut current = serde_json::to_value(&vm_state.metadata).unwrap();
+        json_merge(&mut current, &patch);
+        let mut updated: VirtualMachine =
+            serde_json::from_value(current).map_err(|e| format!("failed to apply patch: {e}"))?;
+
+        // Bump etag
+        vm_state.etag_version += 1;
+        updated.etag = Some(format!("\"{}\"", vm_state.etag_version));
+
+        // Strip adminPassword if present in patch
+        if let Some(ref mut os_profile) = updated.properties.os_profile {
+            os_profile.admin_password = None;
+        }
+
+        vm_state.metadata = updated.clone();
+        Ok(updated)
+    }
+
+    /// List all VMs across all resource groups in a subscription.
+    pub async fn list_all_virtual_machines(
+        &self,
+        subscription_id: &str,
+    ) -> Option<Page<VirtualMachine>> {
+        let state = self.inner.read().await;
+        let sub = state.subscriptions.get(subscription_id)?;
+        let vms: Vec<VirtualMachine> = sub
+            .resource_groups
+            .values()
+            .flat_map(|rg| rg.virtual_machines.values().map(|vm| vm.metadata.clone()))
+            .collect();
+        Some(Page::new(vms))
+    }
+
+    /// List all VMs at a specific location across all resource groups.
+    pub async fn list_virtual_machines_by_location(
+        &self,
+        subscription_id: &str,
+        location: &str,
+    ) -> Option<Page<VirtualMachine>> {
+        let state = self.inner.read().await;
+        let sub = state.subscriptions.get(subscription_id)?;
+        let location_lower = location.to_lowercase();
+        let vms: Vec<VirtualMachine> = sub
+            .resource_groups
+            .values()
+            .flat_map(|rg| {
+                rg.virtual_machines
+                    .values()
+                    .filter(|vm| vm.metadata.location.to_lowercase() == location_lower)
+                    .map(|vm| vm.metadata.clone())
+            })
+            .collect();
+        Some(Page::new(vms))
+    }
+
+    /// Mark a VM as generalized.
+    pub async fn generalize_virtual_machine(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<(), String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        let vm = rg
+            .virtual_machines
+            .get_mut(name)
+            .ok_or_else(|| format!("Virtual machine '{name}' not found"))?;
+        vm.power_state = PowerState::Stopped;
+        // In real Azure, generalize changes the OS state — we just mark it stopped
+        Ok(())
+    }
+
+    /// Simulate eviction of a Spot VM — deallocate or delete based on eviction policy.
+    pub async fn simulate_eviction(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<(), String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        let vm = rg
+            .virtual_machines
+            .get_mut(name)
+            .ok_or_else(|| format!("Virtual machine '{name}' not found"))?;
+
+        let policy = vm
+            .metadata
+            .properties
+            .eviction_policy
+            .as_deref()
+            .unwrap_or("Deallocate");
+
+        if policy == "Delete" {
+            rg.virtual_machines.remove(name);
+        } else {
+            vm.power_state = PowerState::Deallocated;
+        }
+        Ok(())
+    }
+
+    /// Returns an Azure-compatible instance view JSON for the VM.
+    pub async fn get_vm_instance_view(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+    ) -> Option<serde_json::Value> {
+        let state = self.inner.read().await;
+        let vm_state = state
+            .subscriptions
+            .get(subscription_id)?
+            .resource_groups
+            .get(resource_group)?
+            .virtual_machines
+            .get(name)?;
+
+        let power_code = match vm_state.power_state {
+            PowerState::Running => "PowerState/running",
+            PowerState::Stopped => "PowerState/stopped",
+            PowerState::Deallocated => "PowerState/deallocated",
+            PowerState::Starting => "PowerState/starting",
+            PowerState::Stopping => "PowerState/stopping",
+        };
+        let power_display = match vm_state.power_state {
+            PowerState::Running => "VM running",
+            PowerState::Stopped => "VM stopped",
+            PowerState::Deallocated => "VM deallocated",
+            PowerState::Starting => "VM starting",
+            PowerState::Stopping => "VM stopping",
+        };
+
+        let computer_name = vm_state
+            .metadata
+            .properties
+            .os_profile
+            .as_ref()
+            .and_then(|p| p.computer_name.clone())
+            .unwrap_or_default();
+
+        let os_name = vm_state
+            .metadata
+            .properties
+            .storage_profile
+            .as_ref()
+            .and_then(|sp| sp.os_disk.as_ref())
+            .and_then(|d| d.os_type.clone())
+            .unwrap_or_default();
+
+        Some(serde_json::json!({
+            "computerName": computer_name,
+            "osName": os_name,
+            "osVersion": "",
+            "vmAgent": {
+                "vmAgentVersion": "2.7.41491.1075",
+                "statuses": [{
+                    "code": "ProvisioningState/succeeded",
+                    "level": "Info",
+                    "displayStatus": "Ready",
+                    "message": "GuestAgent is running and processing the extensions.",
+                    "time": chrono::Utc::now().to_rfc3339()
+                }]
+            },
+            "disks": [],
+            "extensions": [],
+            "statuses": [
+                {
+                    "code": "ProvisioningState/succeeded",
+                    "level": "Info",
+                    "displayStatus": "Provisioning succeeded",
+                    "time": chrono::Utc::now().to_rfc3339()
+                },
+                {
+                    "code": power_code,
+                    "level": "Info",
+                    "displayStatus": power_display
+                }
+            ]
+        }))
     }
 
     // ── Virtual Networks ───────────────────────────────────────────────
@@ -940,6 +1212,30 @@ state = "Enabled"
             }
         }
         None
+    }
+}
+
+/// RFC 7396 JSON Merge Patch — recursively merge `patch` into `target`.
+fn json_merge(target: &mut serde_json::Value, patch: &serde_json::Value) {
+    if let serde_json::Value::Object(patch_obj) = patch {
+        if let serde_json::Value::Object(target_obj) = target {
+            for (key, value) in patch_obj {
+                if value.is_null() {
+                    target_obj.remove(key);
+                } else if value.is_object() {
+                    let entry = target_obj
+                        .entry(key.clone())
+                        .or_insert(serde_json::Value::Object(serde_json::Map::new()));
+                    json_merge(entry, value);
+                } else {
+                    target_obj.insert(key.clone(), value.clone());
+                }
+            }
+        } else {
+            *target = patch.clone();
+        }
+    } else {
+        *target = patch.clone();
     }
 }
 

@@ -10,41 +10,94 @@ fn vm_params() -> CreateVirtualMachineParams {
         properties: VirtualMachineProperties {
             vm_id: None,
             provisioning_state: None,
-            hardware_profile: HardwareProfile {
-                vm_size: "Standard_D2s_v3".to_string(),
-            },
-            storage_profile: StorageProfile {
+            hardware_profile: Some(HardwareProfile {
+                vm_size: Some("Standard_D2s_v3".to_string()),
+                vm_size_properties: None,
+            }),
+            storage_profile: Some(StorageProfile {
                 image_reference: Some(ImageReference {
+                    id: None,
                     publisher: Some("Canonical".to_string()),
                     offer: Some("UbuntuServer".to_string()),
                     sku: Some("18.04-LTS".to_string()),
                     version: Some("latest".to_string()),
+                    exact_version: None,
+                    shared_gallery_image_id: None,
+                    community_gallery_image_id: None,
                 }),
-                os_disk: OsDisk {
-                    name: "osdisk".to_string(),
+                os_disk: Some(OsDisk {
+                    name: Some("osdisk".to_string()),
                     create_option: "FromImage".to_string(),
                     caching: Some("ReadWrite".to_string()),
-                    managed_disk: Some(ManagedDisk {
+                    managed_disk: Some(ManagedDiskParameters {
                         storage_account_type: Some("Premium_LRS".to_string()),
                         id: None,
+                        disk_encryption_set: None,
+                        security_profile: None,
                     }),
-                },
-            },
-            os_profile: Some(OsProfile {
-                computer_name: "testvm".to_string(),
-                admin_username: "azureuser".to_string(),
-                linux_configuration: Some(LinuxConfiguration {
-                    disable_password_authentication: true,
+                    os_type: None,
+                    disk_size_gb: None,
+                    write_accelerator_enabled: None,
+                    image: None,
+                    vhd: None,
+                    encryption_settings: None,
+                    delete_option: None,
+                    diff_disk_settings: None,
                 }),
+                data_disks: None,
+                disk_controller_type: None,
             }),
-            network_profile: NetworkProfile {
-                network_interfaces: vec![NetworkInterfaceReference {
-                    id: "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test-rg/providers/Microsoft.Network/networkInterfaces/myNIC".to_string(),
-                    properties: Some(NetworkInterfaceReferenceProperties { primary: true }),
-                }],
-            },
+            os_profile: Some(OsProfile {
+                computer_name: Some("testvm".to_string()),
+                admin_username: Some("azureuser".to_string()),
+                admin_password: None,
+                custom_data: None,
+                linux_configuration: Some(LinuxConfiguration {
+                    disable_password_authentication: Some(true),
+                    ssh: None,
+                    provision_vm_agent: None,
+                    patch_settings: None,
+                    enable_vm_agent_platform_updates: None,
+                }),
+                windows_configuration: None,
+                secrets: None,
+                allow_extension_operations: None,
+                require_guest_provision_signal: None,
+            }),
+            network_profile: Some(NetworkProfile {
+                network_interfaces: Some(vec![NetworkInterfaceReference {
+                    id: Some("/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test-rg/providers/Microsoft.Network/networkInterfaces/myNIC".to_string()),
+                    properties: Some(NetworkInterfaceReferenceProperties { primary: Some(true), delete_option: None }),
+                }]),
+                network_interface_configurations: None,
+                network_api_version: None,
+            }),
+            security_profile: None,
+            diagnostics_profile: None,
+            availability_set: None,
+            virtual_machine_scale_set: None,
+            proximity_placement_group: None,
+            host_group: None,
+            host: None,
+            license_type: None,
+            time_created: None,
+            additional_capabilities: None,
+            billing_profile: None,
+            eviction_policy: None,
+            priority: None,
+            scheduled_events_profile: None,
+            user_data: None,
+            capacity_reservation: None,
+            application_profile: None,
+            extensions_time_budget: None,
+            instance_view: None,
+            platform_fault_domain: None,
         },
         tags: HashMap::new(),
+        zones: None,
+        identity: None,
+        extended_location: None,
+        plan: None,
     }
 }
 
@@ -83,7 +136,15 @@ async fn create_and_get_vm() {
         vm.properties.provisioning_state.as_deref(),
         Some("Succeeded")
     );
-    assert_eq!(vm.properties.hardware_profile.vm_size, "Standard_D2s_v3");
+    assert_eq!(
+        vm.properties
+            .hardware_profile
+            .as_ref()
+            .unwrap()
+            .vm_size
+            .as_deref(),
+        Some("Standard_D2s_v3")
+    );
 
     // Fetch it back
     let fetched = compute
@@ -92,8 +153,14 @@ async fn create_and_get_vm() {
         .unwrap();
     assert_eq!(fetched.name, "my-vm");
     assert_eq!(
-        fetched.properties.hardware_profile.vm_size,
-        "Standard_D2s_v3"
+        fetched
+            .properties
+            .hardware_profile
+            .as_ref()
+            .unwrap()
+            .vm_size
+            .as_deref(),
+        Some("Standard_D2s_v3")
     );
 }
 

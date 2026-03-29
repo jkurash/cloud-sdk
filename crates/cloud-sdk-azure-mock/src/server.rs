@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 
 use crate::config::AzureMockConfig;
-use crate::middleware::{api_version, auth, request_id};
+use crate::middleware::{api_version, auth, delay, request_id};
 use crate::routes::{
     blobs, compute, identity, networking, oauth, resource_groups, storage_accounts, subscriptions,
 };
@@ -86,18 +86,38 @@ impl AzureMockServer {
                 "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Storage/storageAccounts",
                 get(storage_accounts::list),
             )
-            // Virtual Machines (ARM)
+            // Virtual Machines (ARM) — CRUD
             .route(
                 "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachines/{vmName}",
                 put(compute::create_or_update)
                     .get(compute::get)
-                    .delete(compute::delete),
+                    .delete(compute::delete)
+                    .patch(compute::update),
             )
             .route(
                 "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachines",
                 get(compute::list),
             )
-            // VM power operations
+            // VM — subscription-wide listing
+            .route(
+                "/subscriptions/{subscriptionId}/providers/Microsoft.Compute/virtualMachines",
+                get(compute::list_all),
+            )
+            // VM — list by location
+            .route(
+                "/subscriptions/{subscriptionId}/providers/Microsoft.Compute/locations/{location}/virtualMachines",
+                get(compute::list_by_location),
+            )
+            // VM — instance view + available sizes
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachines/{vmName}/instanceView",
+                get(compute::instance_view),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachines/{vmName}/vmSizes",
+                get(compute::list_available_sizes),
+            )
+            // VM — power operations
             .route(
                 "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachines/{vmName}/start",
                 post(compute::start),
@@ -113,6 +133,27 @@ impl AzureMockServer {
             .route(
                 "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachines/{vmName}/deallocate",
                 post(compute::deallocate),
+            )
+            // VM — lifecycle operations
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachines/{vmName}/generalize",
+                post(compute::generalize),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachines/{vmName}/reapply",
+                post(compute::reapply),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachines/{vmName}/simulateEviction",
+                post(compute::simulate_eviction),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachines/{vmName}/redeploy",
+                post(compute::redeploy),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Compute/virtualMachines/{vmName}/reimage",
+                post(compute::reimage),
             )
             // Virtual Networks
             .route(
@@ -174,12 +215,16 @@ impl AzureMockServer {
         // OAuth2 token endpoint (no auth/api-version middleware — this IS the auth endpoint)
         let oauth_routes = Router::new().route("/{tenantId}/oauth2/v2.0/token", post(oauth::token));
 
-        // Combine all under shared state + response headers
+        // Combine all under shared state + response headers + delay
+        let delay_ms = self.config.server.delay_ms;
         Router::new()
             .merge(arm_routes)
             .merge(blob_routes)
             .merge(oauth_routes)
             .layer(axum::middleware::from_fn(request_id::add_response_headers))
+            .layer(axum::middleware::from_fn(delay::make_delay_middleware(
+                delay_ms,
+            )))
             .with_state(self.state)
     }
 
