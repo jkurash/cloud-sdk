@@ -16,7 +16,7 @@ use cloud_sdk_core::services::networking::{
 };
 use cloud_sdk_core::services::storage::{
     BlobContainer, BlobProperties, CreateStorageAccountParams, StorageAccount,
-    StorageAccountProperties, StorageEndpoints, StorageSku,
+    StorageAccountProperties, StorageEndpoints, StorageServiceProperties, StorageSku,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -87,16 +87,20 @@ struct VmState {
 struct StorageAccountState {
     metadata: StorageAccount,
     containers: HashMap<String, ContainerState>,
+    service_properties: StorageServiceProperties,
 }
 
 struct ContainerState {
     metadata: BlobContainer,
+    container_metadata: HashMap<String, String>,
     blobs: HashMap<String, BlobState>,
 }
 
 struct BlobState {
     properties: BlobProperties,
     data: bytes::Bytes,
+    uncommitted_blocks: HashMap<String, bytes::Bytes>,
+    committed_blocks: Vec<(String, bytes::Bytes)>,
 }
 
 impl MockState {
@@ -406,6 +410,15 @@ state = "Enabled"
             StorageAccountState {
                 metadata: account.clone(),
                 containers: HashMap::new(),
+                service_properties: StorageServiceProperties {
+                    logging: None,
+                    hour_metrics: None,
+                    minute_metrics: None,
+                    cors: None,
+                    default_service_version: Some("2023-11-03".to_string()),
+                    delete_retention_policy: None,
+                    static_website: None,
+                },
             },
         );
 
@@ -556,13 +569,22 @@ state = "Enabled"
         let sa = Self::find_storage_account_mut(&mut state, account)
             .ok_or_else(|| format!("Storage account '{account}' not found"))?;
 
+        let now = chrono::Utc::now().to_rfc2822();
         sa.containers.insert(
             container.to_string(),
             ContainerState {
                 metadata: BlobContainer {
                     name: container.to_string(),
-                    last_modified: Some(chrono::Utc::now().to_rfc2822()),
+                    last_modified: Some(now),
+                    etag: Some(format!("\"0x{}\"", uuid::Uuid::new_v4().simple())),
+                    lease_status: Some("unlocked".to_string()),
+                    lease_state: Some("available".to_string()),
+                    public_access: None,
+                    has_immutability_policy: Some(false),
+                    has_legal_hold: Some(false),
+                    metadata: HashMap::new(),
                 },
+                container_metadata: HashMap::new(),
                 blobs: HashMap::new(),
             },
         );
@@ -600,6 +622,7 @@ state = "Enabled"
             .get_mut(container)
             .ok_or_else(|| format!("Container '{container}' not found"))?;
 
+        let now = chrono::Utc::now();
         let properties = BlobProperties {
             name: blob_name.to_string(),
             content_length: data.len() as u64,
@@ -608,11 +631,36 @@ state = "Enabled"
                     .unwrap_or("application/octet-stream")
                     .to_string(),
             ),
-            last_modified: Some(chrono::Utc::now().to_rfc2822()),
+            content_encoding: None,
+            content_language: None,
+            content_disposition: None,
+            content_md5: None,
+            cache_control: None,
+            last_modified: Some(now.to_rfc2822()),
+            etag: Some(format!("\"0x{}\"", uuid::Uuid::new_v4().simple())),
+            blob_type: Some("BlockBlob".to_string()),
+            access_tier: Some("Hot".to_string()),
+            lease_status: Some("unlocked".to_string()),
+            lease_state: Some("available".to_string()),
+            server_encrypted: Some(true),
+            creation_time: Some(now.to_rfc3339()),
+            copy_id: None,
+            copy_status: None,
+            copy_source: None,
+            copy_progress: None,
+            metadata: HashMap::new(),
+            tags: HashMap::new(),
         };
 
-        cont.blobs
-            .insert(blob_name.to_string(), BlobState { properties, data });
+        cont.blobs.insert(
+            blob_name.to_string(),
+            BlobState {
+                properties,
+                data,
+                uncommitted_blocks: HashMap::new(),
+                committed_blocks: Vec::new(),
+            },
+        );
         Ok(())
     }
 
@@ -661,6 +709,447 @@ state = "Enabled"
         let sa = Self::find_storage_account(&state, account)?;
         let cont = sa.containers.get(container)?;
         cont.blobs.get(blob_name).map(|b| b.properties.clone())
+    }
+
+    // ── Container extended operations (data plane) ────────────────────
+
+    /// Get container properties (returns the full BlobContainer metadata).
+    pub async fn get_container_properties(
+        &self,
+        account: &str,
+        container: &str,
+    ) -> Option<BlobContainer> {
+        let state = self.inner.read().await;
+        let sa = Self::find_storage_account(&state, account)?;
+        let cont = sa.containers.get(container)?;
+        let mut meta = cont.metadata.clone();
+        meta.metadata.clone_from(&cont.container_metadata);
+        Some(meta)
+    }
+
+    /// Get container metadata only.
+    pub async fn get_container_metadata(
+        &self,
+        account: &str,
+        container: &str,
+    ) -> Option<HashMap<String, String>> {
+        let state = self.inner.read().await;
+        let sa = Self::find_storage_account(&state, account)?;
+        let cont = sa.containers.get(container)?;
+        Some(cont.container_metadata.clone())
+    }
+
+    /// Set container metadata.
+    pub async fn set_container_metadata(
+        &self,
+        account: &str,
+        container: &str,
+        metadata: HashMap<String, String>,
+    ) -> Result<(), String> {
+        let mut state = self.inner.write().await;
+        let sa = Self::find_storage_account_mut(&mut state, account)
+            .ok_or_else(|| format!("Storage account '{account}' not found"))?;
+        let cont = sa
+            .containers
+            .get_mut(container)
+            .ok_or_else(|| format!("Container '{container}' not found"))?;
+        cont.container_metadata = metadata.clone();
+        cont.metadata.metadata = metadata;
+        cont.metadata.last_modified = Some(chrono::Utc::now().to_rfc2822());
+        cont.metadata.etag = Some(format!("\"0x{}\"", uuid::Uuid::new_v4().simple()));
+        Ok(())
+    }
+
+    // ── Blob metadata/properties/tags (data plane) ────────────────────
+
+    /// Get blob metadata only.
+    pub async fn get_blob_metadata(
+        &self,
+        account: &str,
+        container: &str,
+        blob_name: &str,
+    ) -> Option<HashMap<String, String>> {
+        let state = self.inner.read().await;
+        let sa = Self::find_storage_account(&state, account)?;
+        let cont = sa.containers.get(container)?;
+        cont.blobs
+            .get(blob_name)
+            .map(|b| b.properties.metadata.clone())
+    }
+
+    /// Set blob metadata.
+    pub async fn set_blob_metadata(
+        &self,
+        account: &str,
+        container: &str,
+        blob_name: &str,
+        metadata: HashMap<String, String>,
+    ) -> Result<(), String> {
+        let mut state = self.inner.write().await;
+        let sa = Self::find_storage_account_mut(&mut state, account)
+            .ok_or_else(|| format!("Storage account '{account}' not found"))?;
+        let cont = sa
+            .containers
+            .get_mut(container)
+            .ok_or_else(|| format!("Container '{container}' not found"))?;
+        let blob = cont
+            .blobs
+            .get_mut(blob_name)
+            .ok_or_else(|| format!("Blob '{blob_name}' not found"))?;
+        blob.properties.metadata = metadata;
+        blob.properties.last_modified = Some(chrono::Utc::now().to_rfc2822());
+        blob.properties.etag = Some(format!("\"0x{}\"", uuid::Uuid::new_v4().simple()));
+        Ok(())
+    }
+
+    /// Get blob tags.
+    pub async fn get_blob_tags(
+        &self,
+        account: &str,
+        container: &str,
+        blob_name: &str,
+    ) -> Option<HashMap<String, String>> {
+        let state = self.inner.read().await;
+        let sa = Self::find_storage_account(&state, account)?;
+        let cont = sa.containers.get(container)?;
+        cont.blobs.get(blob_name).map(|b| b.properties.tags.clone())
+    }
+
+    /// Set blob tags.
+    pub async fn set_blob_tags(
+        &self,
+        account: &str,
+        container: &str,
+        blob_name: &str,
+        tags: HashMap<String, String>,
+    ) -> Result<(), String> {
+        let mut state = self.inner.write().await;
+        let sa = Self::find_storage_account_mut(&mut state, account)
+            .ok_or_else(|| format!("Storage account '{account}' not found"))?;
+        let cont = sa
+            .containers
+            .get_mut(container)
+            .ok_or_else(|| format!("Container '{container}' not found"))?;
+        let blob = cont
+            .blobs
+            .get_mut(blob_name)
+            .ok_or_else(|| format!("Blob '{blob_name}' not found"))?;
+        blob.properties.tags = tags;
+        Ok(())
+    }
+
+    /// Set blob properties (content-type, cache-control, etc.).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn set_blob_properties(
+        &self,
+        account: &str,
+        container: &str,
+        blob_name: &str,
+        content_type: Option<String>,
+        content_encoding: Option<String>,
+        content_language: Option<String>,
+        content_disposition: Option<String>,
+        cache_control: Option<String>,
+    ) -> Result<(), String> {
+        let mut state = self.inner.write().await;
+        let sa = Self::find_storage_account_mut(&mut state, account)
+            .ok_or_else(|| format!("Storage account '{account}' not found"))?;
+        let cont = sa
+            .containers
+            .get_mut(container)
+            .ok_or_else(|| format!("Container '{container}' not found"))?;
+        let blob = cont
+            .blobs
+            .get_mut(blob_name)
+            .ok_or_else(|| format!("Blob '{blob_name}' not found"))?;
+
+        if let Some(ct) = content_type {
+            blob.properties.content_type = Some(ct);
+        }
+        if let Some(ce) = content_encoding {
+            blob.properties.content_encoding = Some(ce);
+        }
+        if let Some(cl) = content_language {
+            blob.properties.content_language = Some(cl);
+        }
+        if let Some(cd) = content_disposition {
+            blob.properties.content_disposition = Some(cd);
+        }
+        if let Some(cc) = cache_control {
+            blob.properties.cache_control = Some(cc);
+        }
+        blob.properties.last_modified = Some(chrono::Utc::now().to_rfc2822());
+        blob.properties.etag = Some(format!("\"0x{}\"", uuid::Uuid::new_v4().simple()));
+        Ok(())
+    }
+
+    // ── Copy Blob / Snapshot / Service Properties (data plane) ─────
+
+    /// Copy a blob from source to destination. Returns the copy ID.
+    pub async fn copy_blob(
+        &self,
+        account: &str,
+        dest_container: &str,
+        dest_blob: &str,
+        source_account: &str,
+        source_container: &str,
+        source_blob: &str,
+    ) -> Result<String, String> {
+        let mut state = self.inner.write().await;
+
+        // Read source blob data + properties
+        let src_sa = Self::find_storage_account(&state, source_account)
+            .ok_or_else(|| format!("Source storage account '{source_account}' not found"))?;
+        let src_cont = src_sa
+            .containers
+            .get(source_container)
+            .ok_or_else(|| format!("Source container '{source_container}' not found"))?;
+        let src_blob_state = src_cont
+            .blobs
+            .get(source_blob)
+            .ok_or_else(|| format!("Source blob '{source_blob}' not found"))?;
+        let src_data = src_blob_state.data.clone();
+        let src_props = src_blob_state.properties.clone();
+
+        // Build destination blob
+        let copy_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now();
+        let dest_properties = BlobProperties {
+            name: dest_blob.to_string(),
+            content_length: src_data.len() as u64,
+            content_type: src_props.content_type,
+            content_encoding: src_props.content_encoding,
+            content_language: src_props.content_language,
+            content_disposition: src_props.content_disposition,
+            content_md5: src_props.content_md5,
+            cache_control: src_props.cache_control,
+            last_modified: Some(now.to_rfc2822()),
+            etag: Some(format!("\"0x{}\"", uuid::Uuid::new_v4().simple())),
+            blob_type: src_props.blob_type,
+            access_tier: src_props.access_tier,
+            lease_status: Some("unlocked".to_string()),
+            lease_state: Some("available".to_string()),
+            server_encrypted: Some(true),
+            creation_time: Some(now.to_rfc3339()),
+            copy_id: Some(copy_id.clone()),
+            copy_status: Some("success".to_string()),
+            copy_source: Some(format!(
+                "http://127.0.0.1/{source_account}/{source_container}/{source_blob}"
+            )),
+            copy_progress: None,
+            metadata: src_props.metadata,
+            tags: src_props.tags,
+        };
+
+        // Write to destination
+        let dest_sa = Self::find_storage_account_mut(&mut state, account)
+            .ok_or_else(|| format!("Storage account '{account}' not found"))?;
+        let dest_cont = dest_sa
+            .containers
+            .get_mut(dest_container)
+            .ok_or_else(|| format!("Container '{dest_container}' not found"))?;
+        dest_cont.blobs.insert(
+            dest_blob.to_string(),
+            BlobState {
+                properties: dest_properties,
+                data: src_data,
+                uncommitted_blocks: HashMap::new(),
+                committed_blocks: Vec::new(),
+            },
+        );
+
+        Ok(copy_id)
+    }
+
+    /// Check if a blob exists (used by snapshot).
+    pub async fn blob_exists(&self, account: &str, container: &str, blob_name: &str) -> bool {
+        let state = self.inner.read().await;
+        Self::find_storage_account(&state, account)
+            .and_then(|sa| sa.containers.get(container))
+            .is_some_and(|cont| cont.blobs.contains_key(blob_name))
+    }
+
+    // ── Block blob operations (data plane) ────────────────────────────
+
+    /// Put a single block (uncommitted).
+    pub async fn put_block(
+        &self,
+        account: &str,
+        container: &str,
+        blob_name: &str,
+        block_id: &str,
+        data: bytes::Bytes,
+    ) -> Result<(), String> {
+        let mut state = self.inner.write().await;
+        let sa = Self::find_storage_account_mut(&mut state, account)
+            .ok_or_else(|| format!("Storage account '{account}' not found"))?;
+        let cont = sa
+            .containers
+            .get_mut(container)
+            .ok_or_else(|| format!("Container '{container}' not found"))?;
+
+        let blob = cont.blobs.entry(blob_name.to_string()).or_insert_with(|| {
+            let now = chrono::Utc::now();
+            BlobState {
+                properties: BlobProperties {
+                    name: blob_name.to_string(),
+                    content_length: 0,
+                    content_type: Some("application/octet-stream".to_string()),
+                    content_encoding: None,
+                    content_language: None,
+                    content_disposition: None,
+                    content_md5: None,
+                    cache_control: None,
+                    last_modified: Some(now.to_rfc2822()),
+                    etag: Some(format!("\"0x{}\"", uuid::Uuid::new_v4().simple())),
+                    blob_type: Some("BlockBlob".to_string()),
+                    access_tier: Some("Hot".to_string()),
+                    lease_status: Some("unlocked".to_string()),
+                    lease_state: Some("available".to_string()),
+                    server_encrypted: Some(true),
+                    creation_time: Some(now.to_rfc3339()),
+                    copy_id: None,
+                    copy_status: None,
+                    copy_source: None,
+                    copy_progress: None,
+                    metadata: HashMap::new(),
+                    tags: HashMap::new(),
+                },
+                data: bytes::Bytes::new(),
+                uncommitted_blocks: HashMap::new(),
+                committed_blocks: Vec::new(),
+            }
+        });
+
+        blob.uncommitted_blocks.insert(block_id.to_string(), data);
+        Ok(())
+    }
+
+    /// Commit blocks into the blob.
+    pub async fn put_block_list(
+        &self,
+        account: &str,
+        container: &str,
+        blob_name: &str,
+        block_ids: Vec<String>,
+        content_type: Option<&str>,
+    ) -> Result<(), String> {
+        let mut state = self.inner.write().await;
+        let sa = Self::find_storage_account_mut(&mut state, account)
+            .ok_or_else(|| format!("Storage account '{account}' not found"))?;
+        let cont = sa
+            .containers
+            .get_mut(container)
+            .ok_or_else(|| format!("Container '{container}' not found"))?;
+        let blob = cont
+            .blobs
+            .get_mut(blob_name)
+            .ok_or_else(|| format!("Blob '{blob_name}' not found"))?;
+
+        // Resolve each block ID: look in uncommitted first, then committed
+        let mut new_committed: Vec<(String, bytes::Bytes)> = Vec::new();
+        let mut concatenated = Vec::new();
+
+        for id in &block_ids {
+            if let Some(data) = blob.uncommitted_blocks.remove(id) {
+                concatenated.extend_from_slice(&data);
+                new_committed.push((id.clone(), data));
+            } else if let Some((_existing_id, data)) =
+                blob.committed_blocks.iter().find(|(bid, _)| bid == id)
+            {
+                let data = data.clone();
+                concatenated.extend_from_slice(&data);
+                new_committed.push((id.clone(), data));
+            } else {
+                return Err(format!("Block ID '{id}' not found"));
+            }
+        }
+
+        // Clear remaining uncommitted blocks and replace committed list
+        blob.uncommitted_blocks.clear();
+        blob.committed_blocks = new_committed;
+        blob.data = bytes::Bytes::from(concatenated);
+
+        // Update properties
+        blob.properties.content_length = blob.data.len() as u64;
+        if let Some(ct) = content_type {
+            blob.properties.content_type = Some(ct.to_string());
+        }
+        let now = chrono::Utc::now();
+        blob.properties.last_modified = Some(now.to_rfc2822());
+        blob.properties.etag = Some(format!("\"0x{}\"", uuid::Uuid::new_v4().simple()));
+
+        Ok(())
+    }
+
+    /// Get the block list.
+    /// Returns (committed_blocks: [(id, size)], uncommitted_blocks: [(id, size)]).
+    pub async fn get_block_list(
+        &self,
+        account: &str,
+        container: &str,
+        blob_name: &str,
+    ) -> Option<(Vec<(String, usize)>, Vec<(String, usize)>)> {
+        let state = self.inner.read().await;
+        let sa = Self::find_storage_account(&state, account)?;
+        let cont = sa.containers.get(container)?;
+        let blob = cont.blobs.get(blob_name)?;
+
+        let committed: Vec<(String, usize)> = blob
+            .committed_blocks
+            .iter()
+            .map(|(id, data)| (id.clone(), data.len()))
+            .collect();
+        let uncommitted: Vec<(String, usize)> = blob
+            .uncommitted_blocks
+            .iter()
+            .map(|(id, data)| (id.clone(), data.len()))
+            .collect();
+
+        Some((committed, uncommitted))
+    }
+
+    /// Set the access tier of a blob.
+    pub async fn set_blob_tier(
+        &self,
+        account: &str,
+        container: &str,
+        blob_name: &str,
+        tier: &str,
+    ) -> Result<(), String> {
+        let mut state = self.inner.write().await;
+        let sa = Self::find_storage_account_mut(&mut state, account)
+            .ok_or_else(|| format!("Storage account '{account}' not found"))?;
+        let cont = sa
+            .containers
+            .get_mut(container)
+            .ok_or_else(|| format!("Container '{container}' not found"))?;
+        let blob = cont
+            .blobs
+            .get_mut(blob_name)
+            .ok_or_else(|| format!("Blob '{blob_name}' not found"))?;
+        blob.properties.access_tier = Some(tier.to_string());
+        Ok(())
+    }
+
+    /// Get service properties for a storage account.
+    pub async fn get_service_properties(&self, account: &str) -> Option<StorageServiceProperties> {
+        let state = self.inner.read().await;
+        let sa = Self::find_storage_account(&state, account)?;
+        Some(sa.service_properties.clone())
+    }
+
+    /// Set service properties for a storage account.
+    pub async fn set_service_properties(
+        &self,
+        account: &str,
+        props: StorageServiceProperties,
+    ) -> Result<(), String> {
+        let mut state = self.inner.write().await;
+        let sa = Self::find_storage_account_mut(&mut state, account)
+            .ok_or_else(|| format!("Storage account '{account}' not found"))?;
+        sa.service_properties = props;
+        Ok(())
     }
 
     // ── Virtual Machines (ARM management plane) ──────────────────────

@@ -5,6 +5,10 @@ use std::collections::HashMap;
 
 use super::blobs::{BlobContainer, BlobProperties};
 use super::identity::StorageAccountIdentity;
+use super::keys::{
+    AccountSasParameters, CheckNameAvailabilityResult, ListAccountSasResponse,
+    ListServiceSasResponse, ServiceSasParameters, StorageAccountListKeysResult,
+};
 use super::models::{ExtendedLocation, StorageAccount, StorageSku};
 use super::properties::StorageAccountProperties;
 
@@ -112,4 +116,110 @@ pub trait StorageService: Send + Sync {
         container: &str,
         blob: &str,
     ) -> impl std::future::Future<Output = Result<BlobProperties, CloudSdkError>> + Send;
+
+    // --- Management plane (extended) ---
+
+    fn update_storage_account(
+        &self,
+        resource_group: &str,
+        name: &str,
+        patch: serde_json::Value,
+    ) -> impl std::future::Future<Output = Result<StorageAccount, CloudSdkError>> + Send;
+
+    fn list_all_storage_accounts(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Page<StorageAccount>, CloudSdkError>> + Send;
+
+    fn check_name_availability(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<CheckNameAvailabilityResult, CloudSdkError>> + Send;
+
+    fn list_keys(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<StorageAccountListKeysResult, CloudSdkError>> + Send;
+
+    fn regenerate_key(
+        &self,
+        resource_group: &str,
+        name: &str,
+        key_name: &str,
+    ) -> impl std::future::Future<Output = Result<StorageAccountListKeysResult, CloudSdkError>> + Send;
+
+    fn list_account_sas(
+        &self,
+        resource_group: &str,
+        name: &str,
+        params: AccountSasParameters,
+    ) -> impl std::future::Future<Output = Result<ListAccountSasResponse, CloudSdkError>> + Send;
+
+    fn list_service_sas(
+        &self,
+        resource_group: &str,
+        name: &str,
+        params: ServiceSasParameters,
+    ) -> impl std::future::Future<Output = Result<ListServiceSasResponse, CloudSdkError>> + Send;
+
+    fn revoke_user_delegation_keys(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<(), CloudSdkError>> + Send;
+
+    // --- Data plane (extended) ---
+
+    fn set_container_metadata(
+        &self,
+        account: &str,
+        container: &str,
+        metadata: HashMap<String, String>,
+    ) -> impl std::future::Future<Output = Result<(), CloudSdkError>> + Send;
+
+    fn get_blob_metadata(
+        &self,
+        account: &str,
+        container: &str,
+        blob: &str,
+    ) -> impl std::future::Future<Output = Result<HashMap<String, String>, CloudSdkError>> + Send;
+
+    fn set_blob_metadata(
+        &self,
+        account: &str,
+        container: &str,
+        blob: &str,
+        metadata: HashMap<String, String>,
+    ) -> impl std::future::Future<Output = Result<(), CloudSdkError>> + Send;
+
+    fn get_blob_tags(
+        &self,
+        account: &str,
+        container: &str,
+        blob: &str,
+    ) -> impl std::future::Future<Output = Result<HashMap<String, String>, CloudSdkError>> + Send;
+
+    fn set_blob_tags(
+        &self,
+        account: &str,
+        container: &str,
+        blob: &str,
+        tags: HashMap<String, String>,
+    ) -> impl std::future::Future<Output = Result<(), CloudSdkError>> + Send;
+
+    fn copy_blob(
+        &self,
+        account: &str,
+        dest_container: &str,
+        dest_blob: &str,
+        source_url: &str,
+    ) -> impl std::future::Future<Output = Result<String, CloudSdkError>> + Send;
+
+    fn set_blob_tier(
+        &self,
+        account: &str,
+        container: &str,
+        blob: &str,
+        tier: &str,
+    ) -> impl std::future::Future<Output = Result<(), CloudSdkError>> + Send;
 }

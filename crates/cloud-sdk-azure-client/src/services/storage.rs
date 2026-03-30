@@ -1,8 +1,13 @@
 use cloud_sdk_core::error::CloudSdkError;
 use cloud_sdk_core::models::Page;
 use cloud_sdk_core::services::storage::{
-    BlobContainer, BlobProperties, CreateStorageAccountParams, StorageAccount, StorageService,
+    AccountSasParameters, BlobContainer, BlobProperties, BlobTag, BlobTags,
+    CheckNameAvailabilityResult, CreateStorageAccountParams, ListAccountSasResponse,
+    ListServiceSasResponse, ServiceSasParameters, StorageAccount,
+    StorageAccountCheckNameAvailabilityParameters, StorageAccountListKeysResult,
+    StorageAccountRegenerateKeyParameters, StorageService,
 };
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::client::AzureClient;
@@ -203,6 +208,336 @@ impl StorageService for AzureStorageService {
                 resource_type: "blob".to_string(),
                 name: blob.to_string(),
             })
+    }
+
+    // ── Management plane (extended) ───────────────────────────────────
+
+    async fn update_storage_account(
+        &self,
+        resource_group: &str,
+        name: &str,
+        patch: serde_json::Value,
+    ) -> Result<StorageAccount, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .storage_account_url(resource_group, name);
+        self.client.patch(url, API_VERSION, &patch).await
+    }
+
+    async fn list_all_storage_accounts(&self) -> Result<Page<StorageAccount>, CloudSdkError> {
+        let url = self.client.config().storage_accounts_all_url();
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn check_name_availability(
+        &self,
+        name: &str,
+    ) -> Result<CheckNameAvailabilityResult, CloudSdkError> {
+        let url = self.client.config().check_storage_name_url();
+        let body = StorageAccountCheckNameAvailabilityParameters {
+            name: name.to_string(),
+            resource_type: "Microsoft.Storage/storageAccounts".to_string(),
+        };
+        self.client.post_json(url, API_VERSION, &body).await
+    }
+
+    async fn list_keys(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<StorageAccountListKeysResult, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .storage_account_action_url(resource_group, name, "listKeys");
+        self.client
+            .post_json(url, API_VERSION, &serde_json::json!({}))
+            .await
+    }
+
+    async fn regenerate_key(
+        &self,
+        resource_group: &str,
+        name: &str,
+        key_name: &str,
+    ) -> Result<StorageAccountListKeysResult, CloudSdkError> {
+        let url =
+            self.client
+                .config()
+                .storage_account_action_url(resource_group, name, "regenerateKey");
+        let body = StorageAccountRegenerateKeyParameters {
+            key_name: key_name.to_string(),
+        };
+        self.client.post_json(url, API_VERSION, &body).await
+    }
+
+    async fn list_account_sas(
+        &self,
+        resource_group: &str,
+        name: &str,
+        params: AccountSasParameters,
+    ) -> Result<ListAccountSasResponse, CloudSdkError> {
+        let url =
+            self.client
+                .config()
+                .storage_account_action_url(resource_group, name, "ListAccountSas");
+        self.client.post_json(url, API_VERSION, &params).await
+    }
+
+    async fn list_service_sas(
+        &self,
+        resource_group: &str,
+        name: &str,
+        params: ServiceSasParameters,
+    ) -> Result<ListServiceSasResponse, CloudSdkError> {
+        let url =
+            self.client
+                .config()
+                .storage_account_action_url(resource_group, name, "ListServiceSas");
+        self.client.post_json(url, API_VERSION, &params).await
+    }
+
+    async fn revoke_user_delegation_keys(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<(), CloudSdkError> {
+        let url = self.client.config().storage_account_action_url(
+            resource_group,
+            name,
+            "revokeUserDelegationKeys",
+        );
+        self.client.post_empty(url, API_VERSION).await
+    }
+
+    // ── Data plane (extended) ─────────────────────────────────────────
+
+    async fn set_container_metadata(
+        &self,
+        account: &str,
+        container: &str,
+        metadata: HashMap<String, String>,
+    ) -> Result<(), CloudSdkError> {
+        self.require_storage_url()?;
+        let mut url = self
+            .client
+            .config()
+            .blob_container_url(account, container)
+            .unwrap();
+        url.query_pairs_mut().append_pair("comp", "metadata");
+
+        let mut headers = reqwest::header::HeaderMap::new();
+        for (key, value) in &metadata {
+            let header_name =
+                reqwest::header::HeaderName::from_bytes(format!("x-ms-meta-{key}").as_bytes())
+                    .map_err(|e| CloudSdkError::ValidationError {
+                        message: format!("invalid metadata key: {e}"),
+                    })?;
+            let header_value = reqwest::header::HeaderValue::from_str(value).map_err(|e| {
+                CloudSdkError::ValidationError {
+                    message: format!("invalid metadata value: {e}"),
+                }
+            })?;
+            headers.insert(header_name, header_value);
+        }
+
+        self.client
+            .put_with_headers(url, bytes::Bytes::new(), headers)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_blob_metadata(
+        &self,
+        account: &str,
+        container: &str,
+        blob: &str,
+    ) -> Result<HashMap<String, String>, CloudSdkError> {
+        self.require_storage_url()?;
+        let mut url = self
+            .client
+            .config()
+            .blob_url(account, container, blob)
+            .unwrap();
+        url.query_pairs_mut().append_pair("comp", "metadata");
+
+        let resp = self.client.get_response(url).await?;
+        let mut metadata = HashMap::new();
+        for (name, value) in resp.headers() {
+            let name_str = name.as_str();
+            if let Some(key) = name_str.strip_prefix("x-ms-meta-") {
+                if let Ok(val) = value.to_str() {
+                    metadata.insert(key.to_string(), val.to_string());
+                }
+            }
+        }
+        Ok(metadata)
+    }
+
+    async fn set_blob_metadata(
+        &self,
+        account: &str,
+        container: &str,
+        blob: &str,
+        metadata: HashMap<String, String>,
+    ) -> Result<(), CloudSdkError> {
+        self.require_storage_url()?;
+        let mut url = self
+            .client
+            .config()
+            .blob_url(account, container, blob)
+            .unwrap();
+        url.query_pairs_mut().append_pair("comp", "metadata");
+
+        let mut headers = reqwest::header::HeaderMap::new();
+        for (key, value) in &metadata {
+            let header_name =
+                reqwest::header::HeaderName::from_bytes(format!("x-ms-meta-{key}").as_bytes())
+                    .map_err(|e| CloudSdkError::ValidationError {
+                        message: format!("invalid metadata key: {e}"),
+                    })?;
+            let header_value = reqwest::header::HeaderValue::from_str(value).map_err(|e| {
+                CloudSdkError::ValidationError {
+                    message: format!("invalid metadata value: {e}"),
+                }
+            })?;
+            headers.insert(header_name, header_value);
+        }
+
+        self.client
+            .put_with_headers(url, bytes::Bytes::new(), headers)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_blob_tags(
+        &self,
+        account: &str,
+        container: &str,
+        blob: &str,
+    ) -> Result<HashMap<String, String>, CloudSdkError> {
+        self.require_storage_url()?;
+        let mut url = self
+            .client
+            .config()
+            .blob_url(account, container, blob)
+            .unwrap();
+        url.query_pairs_mut().append_pair("comp", "tags");
+
+        let blob_tags: BlobTags = self.client.get_json_raw(url).await?;
+        let tags = blob_tags
+            .blob_tag_set
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| (t.key, t.value))
+            .collect();
+        Ok(tags)
+    }
+
+    async fn set_blob_tags(
+        &self,
+        account: &str,
+        container: &str,
+        blob: &str,
+        tags: HashMap<String, String>,
+    ) -> Result<(), CloudSdkError> {
+        self.require_storage_url()?;
+        let mut url = self
+            .client
+            .config()
+            .blob_url(account, container, blob)
+            .unwrap();
+        url.query_pairs_mut().append_pair("comp", "tags");
+
+        let blob_tags = BlobTags {
+            blob_tag_set: Some(
+                tags.into_iter()
+                    .map(|(key, value)| BlobTag { key, value })
+                    .collect(),
+            ),
+        };
+        let body = serde_json::to_vec(&blob_tags)
+            .map_err(|e| CloudSdkError::Internal(format!("failed to serialize tags: {e}")))?;
+
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+
+        self.client
+            .put_with_headers(url, bytes::Bytes::from(body), headers)
+            .await?;
+        Ok(())
+    }
+
+    async fn copy_blob(
+        &self,
+        account: &str,
+        dest_container: &str,
+        dest_blob: &str,
+        source_url: &str,
+    ) -> Result<String, CloudSdkError> {
+        self.require_storage_url()?;
+        let url = self
+            .client
+            .config()
+            .blob_url(account, dest_container, dest_blob)
+            .unwrap();
+
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::HeaderName::from_static("x-ms-copy-source"),
+            reqwest::header::HeaderValue::from_str(source_url).map_err(|e| {
+                CloudSdkError::ValidationError {
+                    message: format!("invalid copy source URL: {e}"),
+                }
+            })?,
+        );
+
+        let resp = self
+            .client
+            .put_with_headers(url, bytes::Bytes::new(), headers)
+            .await?;
+        let copy_id = resp
+            .headers()
+            .get("x-ms-copy-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("unknown")
+            .to_string();
+        Ok(copy_id)
+    }
+
+    async fn set_blob_tier(
+        &self,
+        account: &str,
+        container: &str,
+        blob: &str,
+        tier: &str,
+    ) -> Result<(), CloudSdkError> {
+        self.require_storage_url()?;
+        let mut url = self
+            .client
+            .config()
+            .blob_url(account, container, blob)
+            .unwrap();
+        url.query_pairs_mut().append_pair("comp", "tier");
+
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::HeaderName::from_static("x-ms-access-tier"),
+            reqwest::header::HeaderValue::from_str(tier).map_err(|e| {
+                CloudSdkError::ValidationError {
+                    message: format!("invalid tier value: {e}"),
+                }
+            })?,
+        );
+
+        self.client
+            .put_with_headers(url, bytes::Bytes::new(), headers)
+            .await?;
+        Ok(())
     }
 }
 

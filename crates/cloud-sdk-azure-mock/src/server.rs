@@ -312,17 +312,26 @@ impl AzureMockServer {
 
         // Blob data plane routes (no api-version required, use x-ms-version header)
         let blob_routes = Router::new()
-            // List containers: GET /{account}?comp=list
-            .route("/{account}", get(blobs::list_containers))
-            // Container ops: PUT/DELETE /{account}/{container}?restype=container
-            // List blobs: GET /{account}/{container}?restype=container&comp=list
+            // Account-level ops: GET dispatches list containers / service properties / account info
+            // PUT dispatches set service properties
+            .route(
+                "/{account}",
+                get(blobs::get_account).put(blobs::put_account),
+            )
+            // Container ops: PUT/DELETE/GET/HEAD /{account}/{container}
+            // PUT dispatches on comp: none=create, metadata=set metadata
+            // GET dispatches on comp: none/list=list blobs, metadata=get metadata
+            // HEAD = get container properties
             .route(
                 "/{account}/{container}",
-                put(blobs::create_container)
+                put(blobs::put_container)
                     .delete(blobs::delete_container)
-                    .get(blobs::list_blobs),
+                    .get(blobs::get_container)
+                    .head(blobs::head_container),
             )
             // Blob ops: PUT/GET/DELETE/HEAD /{account}/{container}/{blob}
+            // PUT dispatches on comp: none=put blob, metadata/tags/properties
+            // GET dispatches on comp: none=get blob, metadata/tags
             .route(
                 "/{account}/{container}/{blob}",
                 put(blobs::put_blob)

@@ -128,6 +128,28 @@ impl AzureClient {
         self.handle_response(resp).await
     }
 
+    /// Send a POST request with a JSON body and deserialize the response.
+    pub async fn post_json<B: Serialize, T: DeserializeOwned>(
+        &self,
+        url: Url,
+        api_version: &str,
+        body: &B,
+    ) -> Result<T, CloudSdkError> {
+        let token = self.bearer_token().await?;
+        let resp = self
+            .http
+            .post(url.as_str())
+            .query(&[("api-version", api_version)])
+            .header(AUTHORIZATION, &token)
+            .header(CONTENT_TYPE, "application/json")
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| CloudSdkError::HttpError(Box::new(e)))?;
+
+        self.handle_response(resp).await
+    }
+
     /// Send a POST request with an empty body (for action endpoints like VM start/stop).
     pub async fn post_empty(&self, url: Url, api_version: &str) -> Result<(), CloudSdkError> {
         let token = self.bearer_token().await?;
@@ -239,6 +261,47 @@ impl AzureClient {
             .await
             .map_err(|e| CloudSdkError::HttpError(Box::new(e)))?;
         self.handle_response(resp).await
+    }
+
+    /// GET a URL and return the full response (for header inspection).
+    pub async fn get_response(&self, url: Url) -> Result<reqwest::Response, CloudSdkError> {
+        let token = self.bearer_token().await?;
+        let resp = self
+            .http
+            .get(url.as_str())
+            .header(AUTHORIZATION, &token)
+            .send()
+            .await
+            .map_err(|e| CloudSdkError::HttpError(Box::new(e)))?;
+        if resp.status().is_success() {
+            Ok(resp)
+        } else {
+            Err(self.parse_error(resp).await)
+        }
+    }
+
+    /// PUT a URL with custom headers and return the full response (for header inspection).
+    pub async fn put_with_headers(
+        &self,
+        url: Url,
+        data: bytes::Bytes,
+        headers: reqwest::header::HeaderMap,
+    ) -> Result<reqwest::Response, CloudSdkError> {
+        let token = self.bearer_token().await?;
+        let resp = self
+            .http
+            .put(url.as_str())
+            .header(AUTHORIZATION, &token)
+            .headers(headers)
+            .body(data)
+            .send()
+            .await
+            .map_err(|e| CloudSdkError::HttpError(Box::new(e)))?;
+        if resp.status().is_success() {
+            Ok(resp)
+        } else {
+            Err(self.parse_error(resp).await)
+        }
     }
 
     /// HEAD a URL and return the response headers (no api-version).

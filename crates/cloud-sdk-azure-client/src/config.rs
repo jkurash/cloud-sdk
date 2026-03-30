@@ -332,6 +332,38 @@ impl AzureConfig {
         self.arm_base_url.join(&path).unwrap()
     }
 
+    /// ARM URL for listing all storage accounts in a subscription.
+    pub fn storage_accounts_all_url(&self) -> Url {
+        let path = format!(
+            "subscriptions/{}/providers/Microsoft.Storage/storageAccounts",
+            self.subscription_id
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    /// ARM URL for check storage account name availability.
+    pub fn check_storage_name_url(&self) -> Url {
+        let path = format!(
+            "subscriptions/{}/providers/Microsoft.Storage/checkNameAvailability",
+            self.subscription_id
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    /// ARM URL for a storage account action (listKeys, regenerateKey, etc.).
+    pub fn storage_account_action_url(
+        &self,
+        rg_name: &str,
+        account_name: &str,
+        action: &str,
+    ) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Storage/storageAccounts/{}/{}",
+            self.subscription_id, rg_name, account_name, action
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
     // ── Blob data plane URLs ───────────────────────────────────────────
 
     /// Data plane URL for container operations: `{base}/{account}/{container}`
