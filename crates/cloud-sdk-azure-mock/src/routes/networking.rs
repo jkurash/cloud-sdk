@@ -3,9 +3,10 @@ use axum::{
     extract::{Path, Query, State},
 };
 use cloud_sdk_core::services::networking::{
-    CreateNetworkInterfaceParams, CreateNsgParams, CreatePublicIPAddressParams, CreateRouteParams,
-    CreateRouteTableParams, CreateSecurityRuleParams, CreateSubnetParams,
-    CreateVirtualNetworkParams, CreateVirtualNetworkPeeringParams,
+    CreateApplicationSecurityGroupParams, CreateNetworkInterfaceParams, CreateNsgParams,
+    CreatePublicIPAddressParams, CreateRouteParams, CreateRouteTableParams,
+    CreateSecurityRuleParams, CreateSubnetParams, CreateVirtualNetworkParams,
+    CreateVirtualNetworkPeeringParams,
 };
 use http::StatusCode;
 use std::collections::HashMap;
@@ -952,4 +953,160 @@ pub async fn delete_peering(
         ),
         Err(msg) => error_response(StatusCode::NOT_FOUND, "ResourceNotFound", &msg),
     }
+}
+
+// ── Application Security Groups ──────────────────────────────────────
+
+pub async fn create_or_update_asg(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, asg_name)): Path<(String, String, String)>,
+    Json(params): Json<CreateApplicationSecurityGroupParams>,
+) -> axum::response::Response {
+    match state
+        .create_application_security_group(&sub_id, &rg, &asg_name, &params)
+        .await
+    {
+        Ok((asg, is_new)) => {
+            let status = if is_new {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            };
+            let json = serde_json::to_string(&asg).unwrap();
+            axum::response::Response::builder()
+                .status(status)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        Err(msg) => error_response(StatusCode::NOT_FOUND, "ResourceNotFound", &msg),
+    }
+}
+
+pub async fn get_asg(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, asg_name)): Path<(String, String, String)>,
+) -> axum::response::Response {
+    match state
+        .get_application_security_group(&sub_id, &rg, &asg_name)
+        .await
+    {
+        Some(asg) => {
+            let json = serde_json::to_string(&asg).unwrap();
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            "ResourceNotFound",
+            &format!("Application security group '{asg_name}' not found."),
+        ),
+    }
+}
+
+pub async fn list_asgs(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg)): Path<(String, String)>,
+) -> axum::response::Response {
+    match state.list_application_security_groups(&sub_id, &rg).await {
+        Some(page) => {
+            let json = serde_json::to_string(&page).unwrap();
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            "ResourceGroupNotFound",
+            &format!("Resource group '{rg}' not found."),
+        ),
+    }
+}
+
+pub async fn list_all_asgs(
+    State(state): State<Arc<MockState>>,
+    Path(sub_id): Path<String>,
+) -> axum::response::Response {
+    match state.list_all_application_security_groups(&sub_id).await {
+        Some(page) => {
+            let json = serde_json::to_string(&page).unwrap();
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        None => error_response(
+            StatusCode::NOT_FOUND,
+            "SubscriptionNotFound",
+            &format!("Subscription '{sub_id}' not found."),
+        ),
+    }
+}
+
+pub async fn delete_asg(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, asg_name)): Path<(String, String, String)>,
+) -> axum::response::Response {
+    match state
+        .delete_application_security_group(&sub_id, &rg, &asg_name)
+        .await
+    {
+        Ok(true) => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .body(axum::body::Body::empty())
+            .unwrap(),
+        Ok(false) => error_response(
+            StatusCode::NOT_FOUND,
+            "ResourceNotFound",
+            &format!("Application security group '{asg_name}' not found."),
+        ),
+        Err(msg) => error_response(StatusCode::NOT_FOUND, "ResourceNotFound", &msg),
+    }
+}
+
+pub async fn update_asg_tags(
+    State(state): State<Arc<MockState>>,
+    Path((sub_id, rg, asg_name)): Path<(String, String, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> axum::response::Response {
+    let tags: HashMap<String, String> = body
+        .get("tags")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    match state
+        .update_application_security_group_tags(&sub_id, &rg, &asg_name, tags)
+        .await
+    {
+        Ok(asg) => {
+            let json = serde_json::to_string(&asg).unwrap();
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        Err(msg) => error_response(StatusCode::NOT_FOUND, "ResourceNotFound", &msg),
+    }
+}
+
+// ── Service Tags ─────────────────────────────────────────────────────
+
+pub async fn list_service_tags(
+    State(state): State<Arc<MockState>>,
+    Path((_sub_id, location)): Path<(String, String)>,
+) -> axum::response::Response {
+    let result = state.list_service_tags(&location).await;
+    let json = serde_json::to_string(&result).unwrap();
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(json))
+        .unwrap()
 }

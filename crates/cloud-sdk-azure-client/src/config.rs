@@ -260,6 +260,42 @@ impl AzureConfig {
 
     // ── VNet Peering ARM URLs ────────────────────────────────────���──────
 
+    // ── Application Security Group ARM URLs ───────────────────────────
+
+    pub fn application_security_group_url(&self, rg: &str, asg: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Network/applicationSecurityGroups/{}",
+            self.subscription_id, rg, asg
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    pub fn application_security_groups_url(&self, rg: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Network/applicationSecurityGroups",
+            self.subscription_id, rg
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    pub fn application_security_groups_all_url(&self) -> Url {
+        let path = format!(
+            "subscriptions/{}/providers/Microsoft.Network/applicationSecurityGroups",
+            self.subscription_id
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
+    // ── Service Tags ARM URLs ───────────────────────────────────────────
+
+    pub fn service_tags_url(&self, location: &str) -> Url {
+        let path = format!(
+            "subscriptions/{}/providers/Microsoft.Network/locations/{}/serviceTags",
+            self.subscription_id, location
+        );
+        self.arm_base_url.join(&path).unwrap()
+    }
+
     pub fn virtual_network_peering_url(&self, rg: &str, vnet: &str, peering: &str) -> Url {
         let path = format!(
             "subscriptions/{}/resourcegroups/{}/providers/Microsoft.Network/virtualNetworks/{}/virtualNetworkPeerings/{}",

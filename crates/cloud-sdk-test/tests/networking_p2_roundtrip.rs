@@ -37,6 +37,11 @@ fn vnet_params() -> CreateVirtualNetworkParams {
             },
             subnets: vec![],
             provisioning_state: None,
+            enable_ddos_protection: None,
+            enable_vm_protection: None,
+            resource_guid: None,
+            flow_timeout_in_minutes: None,
+            encryption: None,
         },
         tags: HashMap::new(),
     }
@@ -91,6 +96,8 @@ async fn list_all_nsgs() {
             location: "eastus".to_string(),
             properties: NsgProperties {
                 security_rules: vec![],
+                default_security_rules: None,
+                resource_guid: None,
                 provisioning_state: None,
             },
             tags: HashMap::new(),
@@ -105,6 +112,8 @@ async fn list_all_nsgs() {
             location: "westus".to_string(),
             properties: NsgProperties {
                 security_rules: vec![],
+                default_security_rules: None,
+                resource_guid: None,
                 provisioning_state: None,
             },
             tags: HashMap::new(),
@@ -129,6 +138,8 @@ async fn update_nsg_tags() {
             location: "eastus".to_string(),
             properties: NsgProperties {
                 security_rules: vec![],
+                default_security_rules: None,
+                resource_guid: None,
                 provisioning_state: None,
             },
             tags: HashMap::new(),

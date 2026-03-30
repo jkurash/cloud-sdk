@@ -6,11 +6,13 @@ use cloud_sdk_core::models::resource::{
 use cloud_sdk_core::services::compute::{CreateVirtualMachineParams, PowerState, VirtualMachine};
 use cloud_sdk_core::services::identity::{Principal, PrincipalType, RoleAssignment};
 use cloud_sdk_core::services::networking::{
-    CreateNetworkInterfaceParams, CreateNsgParams, CreatePublicIPAddressParams, CreateRouteParams,
-    CreateRouteTableParams, CreateSecurityRuleParams, CreateSubnetParams,
-    CreateVirtualNetworkParams, CreateVirtualNetworkPeeringParams, NetworkInterface,
-    NetworkSecurityGroup, PublicIPAddress, Route, RouteTable, SecurityRule, Subnet,
-    SubnetProperties, VirtualNetwork, VirtualNetworkPeering,
+    ApplicationSecurityGroup, ApplicationSecurityGroupProperties,
+    CreateApplicationSecurityGroupParams, CreateNetworkInterfaceParams, CreateNsgParams,
+    CreatePublicIPAddressParams, CreateRouteParams, CreateRouteTableParams,
+    CreateSecurityRuleParams, CreateSubnetParams, CreateVirtualNetworkParams,
+    CreateVirtualNetworkPeeringParams, NetworkInterface, NetworkSecurityGroup, PublicIPAddress,
+    Route, RouteTable, SecurityRule, ServiceTagInformation, ServiceTagInformationProperties,
+    ServiceTagsListResult, Subnet, SubnetProperties, VirtualNetwork, VirtualNetworkPeering,
 };
 use cloud_sdk_core::services::storage::{
     BlobContainer, BlobProperties, CreateStorageAccountParams, StorageAccount,
@@ -62,6 +64,7 @@ struct ResourceGroupState {
     network_interfaces: HashMap<String, NetworkInterface>,
     public_ip_addresses: HashMap<String, PublicIPAddress>,
     route_tables: HashMap<String, RouteTableState>,
+    application_security_groups: HashMap<String, ApplicationSecurityGroup>,
 }
 
 struct VnetState {
@@ -136,6 +139,7 @@ impl MockState {
                         network_interfaces: HashMap::new(),
                         public_ip_addresses: HashMap::new(),
                         route_tables: HashMap::new(),
+                        application_security_groups: HashMap::new(),
                     },
                 );
             }
@@ -248,6 +252,7 @@ state = "Enabled"
                 network_interfaces: HashMap::new(),
                 public_ip_addresses: HashMap::new(),
                 route_tables: HashMap::new(),
+                application_security_groups: HashMap::new(),
             },
         );
 
@@ -2014,6 +2019,184 @@ state = "Enabled"
             .get_mut(vnet_name)
             .ok_or_else(|| format!("Virtual network '{vnet_name}' not found"))?;
         Ok(vnet.peerings.remove(peering_name).is_some())
+    }
+
+    // ── Application Security Groups ─────────────────────────────────
+
+    pub async fn create_application_security_group(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+        params: &CreateApplicationSecurityGroupParams,
+    ) -> Result<(ApplicationSecurityGroup, bool), String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+
+        let asg = ApplicationSecurityGroup {
+            id: format!(
+                "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Network/applicationSecurityGroups/{name}"
+            ),
+            name: name.to_string(),
+            resource_type: "Microsoft.Network/applicationSecurityGroups".to_string(),
+            location: params.location.clone(),
+            tags: params.tags.clone(),
+            etag: Some("\"1\"".to_string()),
+            properties: ApplicationSecurityGroupProperties {
+                provisioning_state: Some("Succeeded".to_string()),
+                resource_guid: Some(uuid::Uuid::new_v4().to_string()),
+            },
+        };
+
+        let is_new = !rg.application_security_groups.contains_key(name);
+        rg.application_security_groups
+            .insert(name.to_string(), asg.clone());
+        Ok((asg, is_new))
+    }
+
+    pub async fn get_application_security_group(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+    ) -> Option<ApplicationSecurityGroup> {
+        let state = self.inner.read().await;
+        state
+            .subscriptions
+            .get(subscription_id)?
+            .resource_groups
+            .get(resource_group)?
+            .application_security_groups
+            .get(name)
+            .cloned()
+    }
+
+    pub async fn list_application_security_groups(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+    ) -> Option<Page<ApplicationSecurityGroup>> {
+        let state = self.inner.read().await;
+        let rg = state
+            .subscriptions
+            .get(subscription_id)?
+            .resource_groups
+            .get(resource_group)?;
+        let asgs: Vec<ApplicationSecurityGroup> =
+            rg.application_security_groups.values().cloned().collect();
+        Some(Page::new(asgs))
+    }
+
+    pub async fn list_all_application_security_groups(
+        &self,
+        subscription_id: &str,
+    ) -> Option<Page<ApplicationSecurityGroup>> {
+        let state = self.inner.read().await;
+        let sub = state.subscriptions.get(subscription_id)?;
+        let asgs: Vec<ApplicationSecurityGroup> = sub
+            .resource_groups
+            .values()
+            .flat_map(|rg| rg.application_security_groups.values().cloned())
+            .collect();
+        Some(Page::new(asgs))
+    }
+
+    pub async fn delete_application_security_group(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<bool, String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        Ok(rg.application_security_groups.remove(name).is_some())
+    }
+
+    pub async fn update_application_security_group_tags(
+        &self,
+        subscription_id: &str,
+        resource_group: &str,
+        name: &str,
+        tags: HashMap<String, String>,
+    ) -> Result<ApplicationSecurityGroup, String> {
+        let mut state = self.inner.write().await;
+        let rg = Self::get_rg_mut(&mut state, subscription_id, resource_group)?;
+        let asg = rg
+            .application_security_groups
+            .get_mut(name)
+            .ok_or_else(|| format!("Application security group '{name}' not found"))?;
+
+        for (k, v) in tags {
+            asg.tags.insert(k, v);
+        }
+
+        Ok(asg.clone())
+    }
+
+    // ── Service Tags ────────────────────────────────────────────────
+
+    pub async fn list_service_tags(&self, location: &str) -> ServiceTagsListResult {
+        ServiceTagsListResult {
+            name: Some(format!("ServiceTagsListResult_{location}")),
+            id: Some(format!(
+                "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Network/locations/{location}/serviceTags/default"
+            )),
+            resource_type: Some("Microsoft.Network/serviceTags".to_string()),
+            change_number: Some("1".to_string()),
+            cloud: Some("Public".to_string()),
+            values: Some(vec![
+                ServiceTagInformation {
+                    name: Some("AzureCloud".to_string()),
+                    id: Some("AzureCloud".to_string()),
+                    service_tag_change_number: Some("1".to_string()),
+                    properties: Some(ServiceTagInformationProperties {
+                        change_number: Some("1".to_string()),
+                        region: Some(String::new()),
+                        system_service: Some("AzureCloud".to_string()),
+                        address_prefixes: Some(vec![
+                            "13.64.0.0/11".to_string(),
+                            "13.96.0.0/13".to_string(),
+                        ]),
+                    }),
+                },
+                ServiceTagInformation {
+                    name: Some("Storage".to_string()),
+                    id: Some("Storage".to_string()),
+                    service_tag_change_number: Some("1".to_string()),
+                    properties: Some(ServiceTagInformationProperties {
+                        change_number: Some("1".to_string()),
+                        region: Some(String::new()),
+                        system_service: Some("AzureStorage".to_string()),
+                        address_prefixes: Some(vec![
+                            "20.33.0.0/16".to_string(),
+                            "20.34.0.0/15".to_string(),
+                        ]),
+                    }),
+                },
+                ServiceTagInformation {
+                    name: Some("Sql".to_string()),
+                    id: Some("Sql".to_string()),
+                    service_tag_change_number: Some("1".to_string()),
+                    properties: Some(ServiceTagInformationProperties {
+                        change_number: Some("1".to_string()),
+                        region: Some(String::new()),
+                        system_service: Some("AzureSQL".to_string()),
+                        address_prefixes: Some(vec!["20.36.0.0/14".to_string()]),
+                    }),
+                },
+                ServiceTagInformation {
+                    name: Some("AzureActiveDirectory".to_string()),
+                    id: Some("AzureActiveDirectory".to_string()),
+                    service_tag_change_number: Some("1".to_string()),
+                    properties: Some(ServiceTagInformationProperties {
+                        change_number: Some("1".to_string()),
+                        region: Some(String::new()),
+                        system_service: Some("AzureAD".to_string()),
+                        address_prefixes: Some(vec!["20.190.128.0/18".to_string()]),
+                    }),
+                },
+            ]),
+        }
     }
 
     // ── Identity ───────────────────────────────────────────────────────

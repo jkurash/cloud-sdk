@@ -3,11 +3,13 @@ use std::collections::HashMap;
 use crate::error::CloudSdkError;
 use crate::models::Page;
 
+use super::asg::{ApplicationSecurityGroup, CreateApplicationSecurityGroupParams};
 use super::nic::{CreateNetworkInterfaceParams, NetworkInterface};
 use super::nsg::{CreateNsgParams, CreateSecurityRuleParams, NetworkSecurityGroup, SecurityRule};
 use super::peering::{CreateVirtualNetworkPeeringParams, VirtualNetworkPeering};
 use super::public_ip::{CreatePublicIPAddressParams, PublicIPAddress};
 use super::route_table::{CreateRouteParams, CreateRouteTableParams, Route, RouteTable};
+use super::service_tags::ServiceTagsListResult;
 use super::subnet::{CreateSubnetParams, Subnet};
 use super::vnet::{CreateVirtualNetworkParams, VirtualNetwork};
 
@@ -284,4 +286,48 @@ pub trait NetworkingService: Send + Sync {
         vnet_name: &str,
         peering_name: &str,
     ) -> impl std::future::Future<Output = Result<(), CloudSdkError>> + Send;
+
+    // ── Application Security Groups ─────────────────────────────────
+
+    fn create_application_security_group(
+        &self,
+        resource_group: &str,
+        name: &str,
+        params: CreateApplicationSecurityGroupParams,
+    ) -> impl std::future::Future<Output = Result<ApplicationSecurityGroup, CloudSdkError>> + Send;
+
+    fn get_application_security_group(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<ApplicationSecurityGroup, CloudSdkError>> + Send;
+
+    fn list_application_security_groups(
+        &self,
+        resource_group: &str,
+    ) -> impl std::future::Future<Output = Result<Page<ApplicationSecurityGroup>, CloudSdkError>> + Send;
+
+    fn list_all_application_security_groups(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Page<ApplicationSecurityGroup>, CloudSdkError>> + Send;
+
+    fn delete_application_security_group(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<(), CloudSdkError>> + Send;
+
+    fn update_application_security_group_tags(
+        &self,
+        resource_group: &str,
+        name: &str,
+        tags: HashMap<String, String>,
+    ) -> impl std::future::Future<Output = Result<ApplicationSecurityGroup, CloudSdkError>> + Send;
+
+    // ── Service Tags ────────────────────────────────────────────────
+
+    fn list_service_tags(
+        &self,
+        location: &str,
+    ) -> impl std::future::Future<Output = Result<ServiceTagsListResult, CloudSdkError>> + Send;
 }

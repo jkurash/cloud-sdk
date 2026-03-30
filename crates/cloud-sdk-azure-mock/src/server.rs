@@ -282,6 +282,25 @@ impl AzureMockServer {
                 "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/virtualNetworks/{vnetName}/virtualNetworkPeerings",
                 get(networking::list_peerings),
             )
+            // Application Security Groups
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/applicationSecurityGroups/{asgName}",
+                put(networking::create_or_update_asg).get(networking::get_asg).delete(networking::delete_asg).patch(networking::update_asg_tags),
+            )
+            .route(
+                "/subscriptions/{subscriptionId}/resourcegroups/{resourceGroupName}/providers/Microsoft.Network/applicationSecurityGroups",
+                get(networking::list_asgs),
+            )
+            // ASG — subscription-wide listing
+            .route(
+                "/subscriptions/{subscriptionId}/providers/Microsoft.Network/applicationSecurityGroups",
+                get(networking::list_all_asgs),
+            )
+            // Service Tags
+            .route(
+                "/subscriptions/{subscriptionId}/providers/Microsoft.Network/locations/{location}/serviceTags",
+                get(networking::list_service_tags),
+            )
             // Identity
             .route("/me", get(identity::get_current_principal))
             .route(

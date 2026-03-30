@@ -1,3 +1,4 @@
+pub mod asg;
 pub mod common;
 pub mod nic;
 pub mod nsg;
@@ -5,9 +6,11 @@ pub mod peering;
 pub mod public_ip;
 pub mod route_table;
 pub mod service;
+pub mod service_tags;
 pub mod subnet;
 pub mod vnet;
 
+pub use asg::*;
 pub use common::*;
 pub use nic::*;
 pub use nsg::*;
@@ -15,5 +18,6 @@ pub use peering::*;
 pub use public_ip::*;
 pub use route_table::*;
 pub use service::*;
+pub use service_tags::*;
 pub use subnet::*;
 pub use vnet::*;

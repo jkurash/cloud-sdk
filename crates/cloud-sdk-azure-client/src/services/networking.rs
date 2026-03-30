@@ -494,4 +494,86 @@ impl NetworkingService for AzureNetworkingService {
         );
         self.client.delete(url, API_VERSION).await
     }
+
+    // ── Application Security Groups ─────────────────────────────────
+
+    async fn create_application_security_group(
+        &self,
+        resource_group: &str,
+        name: &str,
+        params: CreateApplicationSecurityGroupParams,
+    ) -> Result<ApplicationSecurityGroup, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .application_security_group_url(resource_group, name);
+        let (asg, _) = self.client.put(url, API_VERSION, &params).await?;
+        Ok(asg)
+    }
+
+    async fn get_application_security_group(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<ApplicationSecurityGroup, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .application_security_group_url(resource_group, name);
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn list_application_security_groups(
+        &self,
+        resource_group: &str,
+    ) -> Result<Page<ApplicationSecurityGroup>, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .application_security_groups_url(resource_group);
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn list_all_application_security_groups(
+        &self,
+    ) -> Result<Page<ApplicationSecurityGroup>, CloudSdkError> {
+        let url = self.client.config().application_security_groups_all_url();
+        self.client.get(url, API_VERSION).await
+    }
+
+    async fn delete_application_security_group(
+        &self,
+        resource_group: &str,
+        name: &str,
+    ) -> Result<(), CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .application_security_group_url(resource_group, name);
+        self.client.delete(url, API_VERSION).await
+    }
+
+    async fn update_application_security_group_tags(
+        &self,
+        resource_group: &str,
+        name: &str,
+        tags: HashMap<String, String>,
+    ) -> Result<ApplicationSecurityGroup, CloudSdkError> {
+        let url = self
+            .client
+            .config()
+            .application_security_group_url(resource_group, name);
+        let body = serde_json::json!({ "tags": tags });
+        self.client.patch(url, API_VERSION, &body).await
+    }
+
+    // ── Service Tags ────────────────────────────────────────────────
+
+    async fn list_service_tags(
+        &self,
+        location: &str,
+    ) -> Result<ServiceTagsListResult, CloudSdkError> {
+        let url = self.client.config().service_tags_url(location);
+        self.client.get(url, API_VERSION).await
+    }
 }

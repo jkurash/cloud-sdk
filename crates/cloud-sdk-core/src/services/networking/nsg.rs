@@ -23,6 +23,18 @@ pub struct NsgProperties {
     )]
     pub security_rules: Vec<SecurityRule>,
     #[serde(
+        rename = "defaultSecurityRules",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default_security_rules: Option<Vec<SecurityRule>>,
+    #[serde(
+        rename = "resourceGuid",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub resource_guid: Option<String>,
+    #[serde(
         rename = "provisioningState",
         default,
         skip_serializing_if = "Option::is_none"

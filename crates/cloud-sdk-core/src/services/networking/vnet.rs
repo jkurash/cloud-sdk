@@ -28,6 +28,39 @@ pub struct VirtualNetworkProperties {
         skip_serializing_if = "Option::is_none"
     )]
     pub provisioning_state: Option<String>,
+    #[serde(
+        rename = "enableDdosProtection",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub enable_ddos_protection: Option<bool>,
+    #[serde(
+        rename = "enableVmProtection",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub enable_vm_protection: Option<bool>,
+    #[serde(
+        rename = "resourceGuid",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub resource_guid: Option<String>,
+    #[serde(
+        rename = "flowTimeoutInMinutes",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub flow_timeout_in_minutes: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<VirtualNetworkEncryption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VirtualNetworkEncryption {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforcement: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
